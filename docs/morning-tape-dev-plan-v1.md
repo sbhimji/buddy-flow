@@ -32,6 +32,10 @@ Goal: every ambiguity that can block a later story is resolved or explicitly def
 **0.4 — Trader Decision Sheet round 1**
 - Deliver Appendix B to the trader; collect D1–D6 (the items that block Phases 0–3). D7+ can wait for their phases.
 
+**0.5 — Spec reconciliation [A9] (open item)**
+- Obtain the trader's "Layers"-numbered spec version (references seen: "Layer 6" bond gate, "Layer 8" leadership-divergence detector) and reconcile its numbering with Build Spec v2's §-numbering.
+- The leadership-divergence detector is not described in any document currently held; capture its definition before scoping it into any phase (3.1's ex-leader flow series is its likely input — see [A8]).
+
 ---
 
 ## Phase 1 — Capture, Replay & Ingestion
@@ -87,6 +91,7 @@ Each story: mini-spec → implement → unit tests → verify on replay → watc
 **3.1 — FlowShare & FlowShareZ [F4]**
 - Per §2.1, z per matched bucket using Phase 2 baselines with σ guard.
 - Document the universe-boundary caveat in the metric's mini-spec: zero-sum holds only within the tracked universe; flow leaving the universe entirely redistributes shares misleadingly (mitigated by 3.7's de-grossing precedence).
+- Concentration stat **[A8]**: per basket per bucket, compute the top member's share of basket dollar volume (e.g., NVDA 63% of basket $vol). Always computed and persisted; rendered per 5.1. The complementary ex-leader basket flow series is the input 3.7's degeneracy guard uses and is the same series a future leadership-divergence detector needs (see 0.5).
 
 **3.2 — Breadth [F17, F18]**
 - Three-state per member vs SPY: outperform / in-line / underperform, with dead-band ±X bps (Decision D7, default 10) and optional persistence filter (member counts only after N consecutive minutes on one side; default 3).
@@ -118,6 +123,7 @@ Each story: mini-spec → implement → unit tests → verify on replay → watc
 - Header language is correlational, never causal [F14]: "MEMORY share collapsing (−1.8σ) while DEFENSIVES surging (+2.1σ), began 09:41" — no "out of / into". The mini-spec records the four assumptions the old phrasing hid (common actor, closed universe, activity≈positioning, simultaneity window).
 - Precedence rule: the de-grossing check (breadth down broadly + dispersion + BIL/SGOV activity) runs **before** any rotation sentence, so "money leaving the universe entirely" is never misreported as rotation into whichever basket shrank least.
 - Define rendering when ≥3 baskets break in one window (list top movers by |z|; no pairwise narrative).
+- Overlap handling **[A6]** (accepted stakeholder proposal): (a) at config load and on every hot-reload, compute the basket-pair overlap matrix and auto-generate disjoint comparison sets (each basket minus the pairwise intersection); (b) all cross-basket narrative — CUSUM shift detection, header shift sentences, pairwise rotation claims — computes on disjoint sets **only** for overlapping pairs; non-overlapping pairs unchanged; (c) disjoint-set series use disjoint-set baselines, summed from per-ticker profiles (free given 2.1's per-ticker storage) — never full-basket baselines; (d) degeneracy guard: if a disjoint remainder has <3 members or <~30% of the basket's average dollar volume, suppress that pair's narrative entirely — a false silence beats a false story — and log the suppression to the nightly ledger; (e) header language remains correlational per [F14]. Display, tiles, glow, and breadth keep **full** membership — the which-crowd-did-it-ignite-with read survives intact.
 - *Done when:* replay tests A–C pass — with test A's expectation first *verified against the recorded SNDK session* before being enshrined [F15]: confirm empirically whether the post-gap signature is share-spike-with-negative-delta (selling pressure) or share collapse (abandonment), and set the test to match reality.
 
 **3.8 — Glow composite [F19b, F19c]**
@@ -143,6 +149,7 @@ Each story: mini-spec → implement → unit tests → verify on replay → watc
 **5.1 — Tile grid**
 - Grid auto-sorted strongest inflow → heaviest outflow; per tile: Glow color/intensity, volume ring = matched-bucket RVOL, breadth fraction, 15-min FlowShareZ sparkline, dark-share dot. 5s refresh.
 - Raw-share visibility [F16]: tile *area* ∝ raw FlowShare (or a one-tap toggle to a raw-share treemap) so the PM can distinguish "unusual for its size" from "large in absolute terms" — equal z ≠ equal dollars.
+- Concentration stat **[A8]**: render the top member's share of basket dollar volume on the tile when it exceeds 50% (e.g., "NVDA 63%") — a >50% tile is honestly "<leader> + friends" and the PM should read it that way. Computed in 3.1; always available in the detail view.
 
 **5.2 — Header**
 - Line 1: mechanical regime sentence from 3.7 (DE-GROSSING / rotation-correlational / RE-GROSSING / CHOP). Line 2: 10Y/30Y level + velocity z (σ guard applies).
@@ -207,3 +214,15 @@ One pass, answered in writing; defaults apply until overridden; the nightly ledg
 | D10 | Glow palette (signed) & sort tie-break | Warm/cold symmetric | 3.8, 5.1 |
 | D11 | Regime-sentence wording sign-off (correlational templates) | Per 3.7 | 3.7, 5.2 |
 | D12 | Basket-edit workflow (who, how, versioned config) | Config file, engineer applies | 0.1 |
+
+## Appendix C — Post-review amendments (2026-08-09)
+
+Accepted stakeholder amendments, numbered per the review discussion (only the items below were delivered as plan changes; the review's other numbered items were not).
+
+| # | Item | Home story |
+|---|------|-----------|
+| A6 | Overlapping-basket fix: cross-basket narrative (CUSUM, header sentences, pairwise rotation claims) computes on auto-generated disjoint sets with disjoint-set baselines; degeneracy guard (<3 members or <~30% of avg $vol → suppress narrative, log to ledger); display keeps full membership | 3.7 |
+| A8 | Per-tile concentration stat: top member's share of basket dollar volume, always computed, rendered when >50% | 3.1, 5.1 |
+| A9 | Obtain and reconcile the trader's "Layers"-numbered spec (Layer 6 bond gate, Layer 8 leadership-divergence detector — latter undocumented here) | 0.5 |
+
+Note: A6 presupposes multi-basket membership (e.g., NVDA in both semis_compute and proof_tier), which effectively answers **D3 = multi allowed** — 0.1's [F5a] caveat (shares no longer sum to 100% across baskets) therefore applies and must be documented.

@@ -47,6 +47,12 @@ de-grossing check runs *before* any rotation sentence.
   velocity z, and any future DeltaRatio z. Literal σ=0 yields a defined null, never an exception.
 - **Glow inputs are normalized to a common signed scale before weighting.** Equal weights are
   meaningless otherwise.
+- **Cross-basket narrative computes on disjoint sets** for overlapping basket pairs (A6, dev plan
+  story 3.7). Shared members (e.g., NVDA in two baskets) would otherwise make a "flow shift"
+  between them substantially one ticker arguing with itself. Disjoint series get disjoint-set
+  baselines summed from per-ticker profiles; a rump remainder (<3 members or <~30% of avg $vol)
+  suppresses that pair's narrative — a false silence beats a false story. Display/tiles/glow/
+  breadth keep full membership.
 - **Zero-sum holds only inside the tracked universe.** Flow leaving the universe entirely
   redistributes shares misleadingly; that is what the de-grossing precedence rule mitigates.
   Note this caveat wherever FlowShare is explained.

@@ -12,12 +12,12 @@ Companion to *Build Specification v2.0*. Restructures the build into phases and 
 
 Goal: every ambiguity that can block a later story is resolved or explicitly deferred; vendor access works.
 
-**0.1 — Universe & basket definition [F4, F5]**
-- Trader delivers: the ~60-ticker universe, basket membership map, universe selection criteria, and review cadence (Decision Sheet items D1–D3).
-- Basket membership stored as editable configuration (versioned file or small table: ticker → basket, effective-date stamped so historical replays use historical membership).
-- Decide single- vs multi-basket membership [F5a]. If multi, document that shares no longer sum to 100% and the zero-sum framing carries a caveat.
-- Include reference instruments: SPY, BIL, SGOV, bond proxies for the header.
-- *Done when:* config loads, validates (no orphan tickers, no empty baskets), and a membership change produces a new version without touching history.
+**~~0.1 — Universe & basket definition [F4, F5]~~** ✅ resolved 2026-08-09
+- *Status:* universe + basket map delivered and trader-confirmed (`docs/foundations/morning-tape-baskets-v2.json`, D1/D3 answered). Selection criteria and review cadence are trader-owned — out of engineering scope (D2).
+- ~~Trader delivers: the universe and basket membership map (Decision Sheet items D1, D3).~~
+- ~~Decide single- vs multi-basket membership [F5a]. If multi, document that shares no longer sum to 100% and the zero-sum framing carries a caveat.~~ Multi confirmed; F5a caveat documented in baskets.md and Appendix C.
+- ~~Include reference instruments: SPY, BIL, SGOV, bond proxies for the header.~~ In config: broad/cash-proxy/duration benchmarks + ZN/ZB.
+- Carried to first code (loader module): effective-date/versioning mechanism; *done when* config loads, validates (no orphan tickers, no empty baskets), and a membership change produces a new version without touching history.
 
 **0.2 — Data vendor setup**
 - Sign up / verify: Databento consolidated trades+NBBO (spine), Polygon Advanced (failover), Unusual Whales (existing license, overlay only — deferred to Phase 6).
@@ -43,7 +43,7 @@ Goal: every ambiguity that can block a later story is resolved or explicitly def
 Goal: live data flows in, every session is recorded, and any recorded session can be replayed deterministically. Replay is the development environment for the entire rest of the project (the market is only open 09:30–16:00 ET weekdays; replay is what makes evening/weekend work possible).
 
 **1.1 — Ingest skeleton & throughput floor [F8]**
-- Hot path in a compiled/concurrent-safe stack (Go/Rust/Java, or carefully structured async with the hot loop out of pure Python). Stated requirement: sustain ≥ 20k messages/sec (trades+quotes) through the 09:30 burst with zero drops.
+- Hot path in a compiled/concurrent-safe stack (Go/Rust/Java, or carefully structured async with the hot loop out of pure Python). Stated requirement: sustain ≥ 20k messages/sec (trades+quotes) through the 09:30 burst with zero drops. **Raised to ≥ 50k msg/sec** per baskets-v2 config: the universe is ~193 symbols incl. benchmarks (166 unique members + 27 benchmarks/futures), not the spec's ~60 — verify Databento tier pricing at this symbol count, and note ZN/ZB bond-gate futures are a separate Databento dataset (CME) not covered by the equities feed.
 - Maintains in-memory current NBBO per ticker (the Lee-Ready lookup table).
 - Evaluate APEX ingestion reuse here: if its feed handlers, reconnect logic, or storage match, port rather than rewrite; reuse is already assumed by the original spec's 60–80% figure.
 - *Done when:* one full live session ingested with message counts matching vendor-reported totals.
@@ -202,9 +202,9 @@ One pass, answered in writing; defaults apply until overridden; the nightly ledg
 
 | ID | Decision | Default | Blocks |
 |----|----------|---------|--------|
-| D1 | Final ~60-ticker universe + basket map | — (required) | 0.1 |
-| D2 | Universe selection criteria & review cadence | Monthly review | 0.1 |
-| D3 | Multi-basket membership allowed? | No (single) | 0.1 |
+| ~~D1~~ | ~~Final universe + basket map~~ | **ANSWERED 2026-08-09**: baskets-v2 config, trader-confirmed | 0.1 |
+| ~~D2~~ | ~~Universe selection criteria & review cadence~~ | **RESOLVED**: trader-owned, out of engineering scope; cadence per baskets.md §4 | 0.1 |
+| ~~D3~~ | ~~Multi-basket membership allowed?~~ | **ANSWERED**: yes (7 overlapping members; F5a caveat applies) | 0.1 |
 | D4 | Baseline event-day exclusions (FOMC/CPI class) | Flag, include | 2.1 |
 | D5 | σ-floor fraction | 0.25× universe median σ | 2.2 |
 | D6 | Robust baseline estimator | Median/MAD | 2.1 |
@@ -214,6 +214,7 @@ One pass, answered in writing; defaults apply until overridden; the nightly ledg
 | D10 | Glow palette (signed) & sort tie-break | Warm/cold symmetric | 3.8, 5.1 |
 | D11 | Regime-sentence wording sign-off (correlational templates) | Per 3.7 | 3.7, 5.2 |
 | D12 | Basket-edit workflow (who, how, versioned config) | Config file, engineer applies | 0.1 |
+| D13 | Ignition options-premium confirmation gate (baskets-v2 config; conflicts with §7 "overlay, never driver" — ignition stays a v2-backlog display-emphasis badge, no alert mechanics, until resolved) | Disabled | 6.6 |
 
 ## Appendix C — Post-review amendments (2026-08-09)
 

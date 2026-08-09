@@ -1,0 +1,399 @@
+{
+  "version": "2.0",
+  "generated_from": "MORNING-TAPE-baskets-v2.docx",
+  "note": "CONFIRMED BY TRADER 2026-08-09 - source of truth. Selection criteria and review cadence are trader-owned, not engineering. SPCX added to space basket (IPO 2026-06-12).",
+  "settings": {
+    "weighting": "equal",
+    "min_price_usd": 3.0,
+    "adr_wide_spread_filter": [
+      "BESIY",
+      "STM",
+      "ASML",
+      "TSM"
+    ],
+    "china_located_flag": [
+      "AXTI"
+    ],
+    "opening_window": {
+      "fine_resolution_s": 1,
+      "fine_until_et": "10:00:00",
+      "coarse_resolution_s": 60
+    },
+    "baselines": {
+      "lookback_days": 20,
+      "matched_time_of_day": true,
+      "per_ticker": true,
+      "min_profiled_days": 10
+    },
+    "ignition": {
+      "enabled": false,
+      "status": "BACKLOG v2 - renders as small badge on top of Glow layer, display emphasis only, no alert mechanics",
+      "ratio_z_abs_min": 1.5,
+      "matched_rvol_min": 1.3,
+      "options_premium_confirmation": "pending trader decision D13 (conflicts with Build Spec section 7)",
+      "small_basket_full_participation": [
+        "dc_reits"
+      ]
+    },
+    "shared_tail_suppression": {
+      "photonics_optics": {
+        "trigger": "basket-wide gap on China InP headlines",
+        "suppress_member_divergence_minutes": 30
+      }
+    },
+    "bond_gate_adjacent": [
+      "neoclouds_dc_builders",
+      "promise_tier_ai"
+    ]
+  },
+  "benchmarks": {
+    "broad": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "RSP"
+    ],
+    "semis": [
+      "SMH",
+      "SOXX"
+    ],
+    "sector_spdrs": [
+      "XLK",
+      "XLF",
+      "XLE",
+      "XLV",
+      "XLP",
+      "XLU",
+      "XLI",
+      "XLB",
+      "XLY",
+      "XLC",
+      "XLRE"
+    ],
+    "thematic": [
+      "URA",
+      "NLR",
+      "ITA",
+      "IGV",
+      "HACK"
+    ],
+    "cash_proxy": [
+      "BIL",
+      "SGOV"
+    ],
+    "duration": [
+      "TLT"
+    ],
+    "bond_gate_futures": [
+      "ZN",
+      "ZB"
+    ]
+  },
+  "baskets": {
+    "proof_tier_ai_megacap": {
+      "members": [
+        "MSFT",
+        "META",
+        "AMZN",
+        "GOOGL",
+        "AAPL",
+        "NVDA",
+        "AVGO",
+        "ORCL",
+        "IBM",
+        "CRM",
+        "NOW"
+      ],
+      "benchmark": "QQQ",
+      "note": "Mega-cap AI with current earnings proof"
+    },
+    "promise_tier_ai": {
+      "members": [
+        "PLTR",
+        "CRDO",
+        "ALAB",
+        "APP",
+        "SOUN",
+        "BBAI",
+        "AI",
+        "PATH",
+        "TEM",
+        "RBRK"
+      ],
+      "benchmark": "QQQ",
+      "note": "High-multiple / story-priced AI incl. high-volume retail names; most rate-sensitive basket"
+    },
+    "semis_compute": {
+      "members": [
+        "NVDA",
+        "AMD",
+        "ARM",
+        "INTC",
+        "TSM",
+        "QCOM"
+      ],
+      "benchmark": "SMH",
+      "note": "Core compute silicon. NVDA double-counted with proof-tier intentionally"
+    },
+    "networking_connectivity": {
+      "members": [
+        "ANET",
+        "AVGO",
+        "MRVL",
+        "ALAB",
+        "CRDO",
+        "CSCO",
+        "CIEN"
+      ],
+      "benchmark": "SMH",
+      "note": "Switching, custom ASIC, DSPs, retimers, optical systems"
+    },
+    "semis_analog_power_auto": {
+      "members": [
+        "TXN",
+        "ADI",
+        "NXPI",
+        "MCHP",
+        "ON",
+        "STM",
+        "SWKS",
+        "QRVO"
+      ],
+      "benchmark": "SOXX",
+      "note": "Analog/auto/industrial semis - the cyclical recovery gauge"
+    },
+    "memory_storage": {
+      "members": [
+        "MU",
+        "SNDK",
+        "WDC",
+        "STX",
+        "SIMO",
+        "PENG",
+        "NTAP",
+        "PSTG"
+      ],
+      "benchmark": "SMH",
+      "note": "DRAM/NAND/HDD + controllers + modules + storage systems. SK Hynix untrackable on US feed (optional EWY overlay)"
+    },
+    "photonics_optics": {
+      "members": [
+        "AAOI",
+        "COHR",
+        "LITE",
+        "VIAV",
+        "FN",
+        "MTSI",
+        "SMTC",
+        "CIEN",
+        "GLW",
+        "POET"
+      ],
+      "benchmark": "SMH",
+      "note": "SHARED TAIL: China InP export-permit headlines move whole basket - treat basket-wide gaps as ONE event, suppress per-member divergence alerts 30min"
+    },
+    "semicap_frontend": {
+      "members": [
+        "AMAT",
+        "LRCX",
+        "KLAC",
+        "ASML",
+        "TER",
+        "ENTG",
+        "MKSI",
+        "AEIS",
+        "ACMR",
+        "UCTT"
+      ],
+      "benchmark": "SMH",
+      "note": "Wafer fab equipment + subsystems"
+    },
+    "packaging_test_substrates": {
+      "members": [
+        "CAMT",
+        "ONTO",
+        "KLIC",
+        "FORM",
+        "BESIY",
+        "AXTI"
+      ],
+      "benchmark": "SMH",
+      "note": "HBM/advanced packaging inspection, bonding, probe + compound-semi substrates (AXTI = InP/GaAs, China-located fabs - dual-flag). BESIY ADR wide-spread filter"
+    },
+    "defense_primes": {
+      "members": [
+        "LMT",
+        "RTX",
+        "NOC",
+        "GD",
+        "LHX",
+        "HII",
+        "LDOS",
+        "BAH"
+      ],
+      "benchmark": "ITA",
+      "note": "Large-cap defense"
+    },
+    "defense_tech_growth": {
+      "members": [
+        "KTOS",
+        "AVAV",
+        "PLTR",
+        "RCAT",
+        "ONDS"
+      ],
+      "benchmark": "ITA",
+      "note": "Drones/software/counter-UAS high-beta tier. PLTR triple-listed intentionally"
+    },
+    "space": {
+      "members": [
+        "RKLB",
+        "LUNR",
+        "ASTS",
+        "RDW",
+        "PL",
+        "SPCX"
+      ],
+      "benchmark": "ITA",
+      "note": "Launch/satellites. SPCX added post-IPO (June 12, 2026); excluded from z-scores until >=10 profiled days"
+    },
+    "critical_minerals": {
+      "members": [
+        "MP",
+        "USAR",
+        "UUUU",
+        "TMC",
+        "ALB",
+        "LAC",
+        "CLF"
+      ],
+      "benchmark": "XLB",
+      "note": "Rare earths, uranium-adjacent, lithium, electrical steel. Moves on DC headlines. UUUU double-counted with nuclear"
+    },
+    "neoclouds_dc_builders": {
+      "members": [
+        "IREN",
+        "APLD",
+        "NBIS",
+        "CRWV",
+        "CIFR",
+        "WULF",
+        "CORZ",
+        "RIOT",
+        "CLSK",
+        "HUT",
+        "GLXY"
+      ],
+      "benchmark": "QQQ",
+      "note": "GPU landlords + converted miners. Most credit-sensitive basket - read against bond gate; ignition during yield spikes = squeeze artifact"
+    },
+    "dc_reits": {
+      "members": [
+        "DLR",
+        "EQIX"
+      ],
+      "benchmark": "XLRE",
+      "note": "2-member basket: only 2/2 breadth = ignition"
+    },
+    "quantum": {
+      "members": [
+        "IONQ",
+        "RGTI",
+        "QBTS",
+        "QUBT",
+        "ARQQ"
+      ],
+      "benchmark": "QQQ",
+      "note": "Froth/risk-appetite gauge incl. high-volume retail names"
+    },
+    "power_equipment": {
+      "members": [
+        "VRT",
+        "ETN",
+        "HUBB",
+        "POWL",
+        "ENS",
+        "VICR",
+        "NVT",
+        "AMSC",
+        "SPXC",
+        "GEV",
+        "CAT",
+        "EMR"
+      ],
+      "benchmark": "XLI",
+      "note": "Transformers, switchgear, turbines, power conversion - the invoice-now layer"
+    },
+    "fuel_cells_storage": {
+      "members": [
+        "BE",
+        "PLUG",
+        "FCEL",
+        "BLDP",
+        "FLNC",
+        "EOSE"
+      ],
+      "benchmark": "XLI",
+      "note": "On-site generation + grid batteries. High-beta retail tier of the power trade"
+    },
+    "nuclear_fuel_cycle": {
+      "members": [
+        "CEG",
+        "VST",
+        "TLN",
+        "NRG",
+        "OKLO",
+        "SMR",
+        "NNE",
+        "LEU",
+        "CCJ",
+        "UEC",
+        "DNN",
+        "UUUU",
+        "BWXT",
+        "CW",
+        "FLR"
+      ],
+      "benchmark": "URA",
+      "note": "Operators + SMR developers + enrichment/miners + components/engineering. Split from power_equipment: different rate-sensitivity and revenue horizon"
+    },
+    "epc_labor": {
+      "members": [
+        "IESC",
+        "MYRG",
+        "EME",
+        "FIX",
+        "PWR",
+        "DY",
+        "STRL",
+        "PRIM"
+      ],
+      "benchmark": "XLI",
+      "note": "Electrical/data-center contractors - the labor bottleneck; uncrowded layer. Early ignition = institutional discovery signal"
+    },
+    "consumption_software": {
+      "members": [
+        "DDOG",
+        "MDB",
+        "SNOW",
+        "NET",
+        "CFLT",
+        "ESTC",
+        "TWLO"
+      ],
+      "benchmark": "IGV",
+      "note": "Usage-billed software - lagged derivative of cloud consumption"
+    },
+    "robotics_av": {
+      "members": [
+        "TSLA",
+        "ISRG",
+        "SYM",
+        "SERV",
+        "PONY"
+      ],
+      "benchmark": "QQQ",
+      "note": "The rotation destination the crowd is entering per PM read - track for ignition confirmation"
+    }
+  }
+}

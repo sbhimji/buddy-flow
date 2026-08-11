@@ -1,0 +1,1709 @@
+{
+  "fetched": "2026-08-10T22:07:43-05:00",
+  "results": [
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 1,
+      "name": "Acquisition",
+      "sip_mapping": {
+        "UTP": "A"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 2,
+      "name": "Average Price Trade",
+      "sip_mapping": {
+        "CTA": "B",
+        "FINRA_TDDS": "W",
+        "UTP": "W"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 3,
+      "name": "Automatic Execution",
+      "sip_mapping": {
+        "CTA": "E"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 4,
+      "name": "Bunched Trade",
+      "sip_mapping": {
+        "UTP": "B"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 5,
+      "name": "Bunched Sold Trade",
+      "sip_mapping": {
+        "UTP": "G"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 6,
+      "legacy": true,
+      "name": "CAP Election",
+      "sip_mapping": {
+        "CTA": "I"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 7,
+      "name": "Cash Sale",
+      "sip_mapping": {
+        "CTA": "C",
+        "FINRA_TDDS": "C",
+        "UTP": "C"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 8,
+      "name": "Closing Prints",
+      "sip_mapping": {
+        "UTP": "6"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 9,
+      "name": "Cross Trade",
+      "sip_mapping": {
+        "CTA": "X",
+        "UTP": "X"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 10,
+      "name": "Derivatively Priced",
+      "sip_mapping": {
+        "CTA": "4",
+        "UTP": "4"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 11,
+      "name": "Distribution",
+      "sip_mapping": {
+        "UTP": "D"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 12,
+      "name": "Form T/Extended Hours",
+      "sip_mapping": {
+        "CTA": "T",
+        "FINRA_TDDS": "T",
+        "UTP": "T"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 13,
+      "name": "Extended Hours (Sold Out Of Sequence)",
+      "sip_mapping": {
+        "CTA": "U",
+        "FINRA_TDDS": "U",
+        "UTP": "U"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 14,
+      "name": "Intermarket Sweep",
+      "sip_mapping": {
+        "CTA": "F",
+        "UTP": "F"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 15,
+      "name": "Market Center Official Close",
+      "sip_mapping": {
+        "CTA": "M",
+        "UTP": "M"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": false
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": false
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 16,
+      "name": "Market Center Official Open",
+      "sip_mapping": {
+        "CTA": "Q",
+        "UTP": "Q"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": false
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": false
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 17,
+      "name": "Market Center Opening Trade",
+      "sip_mapping": {
+        "CTA": "O"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 18,
+      "name": "Market Center Reopening Trade",
+      "sip_mapping": {
+        "CTA": "5"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 19,
+      "name": "Market Center Closing Trade",
+      "sip_mapping": {
+        "CTA": "6"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 20,
+      "name": "Next Day",
+      "sip_mapping": {
+        "CTA": "N",
+        "FINRA_TDDS": "N",
+        "UTP": "N"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 21,
+      "name": "Price Variation Trade",
+      "sip_mapping": {
+        "CTA": "H",
+        "UTP": "H"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 22,
+      "name": "Prior Reference Price",
+      "sip_mapping": {
+        "CTA": "P",
+        "FINRA_TDDS": "P",
+        "UTP": "P"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "exchange": 1,
+      "id": 23,
+      "name": "Rule 155 Trade (AMEX)",
+      "sip_mapping": {
+        "CTA": "K",
+        "UTP": "K"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "exchange": 10,
+      "id": 24,
+      "name": "Rule 127 (NYSE Only)",
+      "sip_mapping": {
+        "CTA": "K"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 25,
+      "name": "Opening Prints",
+      "sip_mapping": {
+        "UTP": "O"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 27,
+      "legacy": true,
+      "name": "Stopped Stock (Regular Trade)",
+      "sip_mapping": {
+        "UTP": "1"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 28,
+      "name": "Re-Opening Prints",
+      "sip_mapping": {
+        "UTP": "5"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 29,
+      "name": "Seller",
+      "sip_mapping": {
+        "CTA": "R",
+        "FINRA_TDDS": "R",
+        "UTP": "R"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 30,
+      "name": "Sold Last",
+      "sip_mapping": {
+        "CTA": "L",
+        "UTP": "L"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 31,
+      "legacy": true,
+      "name": "Sold Last and Stopped Stock",
+      "sip_mapping": {
+        "UTP": "2"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 32,
+      "name": "Sold (Out Of Sequence)",
+      "sip_mapping": {
+        "CTA": "Z",
+        "FINRA_TDDS": "Z",
+        "UTP": "Z"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 33,
+      "legacy": true,
+      "name": "Sold (Out of Sequence) and Stopped Stock",
+      "sip_mapping": {
+        "UTP": "3"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 34,
+      "name": "Split Trade",
+      "sip_mapping": {
+        "UTP": "S"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 35,
+      "legacy": true,
+      "name": "Stock Option",
+      "sip_mapping": {
+        "UTP": "V"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 36,
+      "name": "Yellow Flag Regular Trade",
+      "sip_mapping": {
+        "UTP": "Y"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 37,
+      "name": "Odd Lot Trade",
+      "sip_mapping": {
+        "CTA": "I",
+        "FINRA_TDDS": "I",
+        "UTP": "I"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 38,
+      "name": "Corrected Consolidated Close (per listing market)",
+      "sip_mapping": {
+        "CTA": "9",
+        "UTP": "9"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": false
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": false
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 41,
+      "name": "Trade Thru Exempt",
+      "sip_mapping": {
+        "CTA": "1",
+        "UTP": "X"
+      },
+      "type": "trade_thru_exempt",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 52,
+      "name": "Contingent Trade",
+      "sip_mapping": {
+        "CTA": "V",
+        "UTP": "V"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 53,
+      "name": "Qualified Contingent Trade",
+      "sip_mapping": {
+        "CTA": "7",
+        "UTP": "7"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 55,
+      "legacy": true,
+      "name": "Opening Reopening Trade Detail",
+      "sip_mapping": {
+        "CTA": "G"
+      },
+      "type": "sale_condition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 57,
+      "name": "Short Sale Restriction Activated",
+      "sip_mapping": {
+        "CTA": "A"
+      },
+      "type": "short_sale_restriction_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 58,
+      "name": "Short Sale Restriction Continued",
+      "sip_mapping": {
+        "CTA": "C"
+      },
+      "type": "short_sale_restriction_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 59,
+      "name": "Short Sale Restriction Deactivated",
+      "sip_mapping": {
+        "CTA": "D"
+      },
+      "type": "short_sale_restriction_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 60,
+      "name": "Short Sale Restriction In Effect",
+      "sip_mapping": {
+        "CTA": "E"
+      },
+      "type": "short_sale_restriction_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 62,
+      "name": "Financial Status - Bankrupt",
+      "sip_mapping": {
+        "CTA": "1"
+      },
+      "type": "financial_status_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 63,
+      "name": "Financial Status - Deficient",
+      "sip_mapping": {
+        "CTA": "2"
+      },
+      "type": "financial_status_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 64,
+      "name": "Financial Status - Delinquent",
+      "sip_mapping": {
+        "CTA": "3"
+      },
+      "type": "financial_status_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 65,
+      "name": "Financial Status - Bankrupt and Deficient",
+      "sip_mapping": {
+        "CTA": "4"
+      },
+      "type": "financial_status_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 66,
+      "name": "Financial Status - Bankrupt and Delinquent",
+      "sip_mapping": {
+        "CTA": "5"
+      },
+      "type": "financial_status_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 67,
+      "name": "Financial Status - Deficient and Delinquent",
+      "sip_mapping": {
+        "CTA": "6"
+      },
+      "type": "financial_status_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 68,
+      "name": "Financial Status - Deficient, Delinquent, and Bankrupt",
+      "sip_mapping": {
+        "CTA": "7"
+      },
+      "type": "financial_status_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 69,
+      "name": "Financial Status - Liquidation",
+      "sip_mapping": {
+        "CTA": "A"
+      },
+      "type": "financial_status_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 70,
+      "name": "Financial Status - Creations Suspended",
+      "sip_mapping": {
+        "CTA": "8"
+      },
+      "type": "financial_status_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "trade"
+      ],
+      "id": 71,
+      "name": "Financial Status - Redemptions Suspended",
+      "sip_mapping": {
+        "CTA": "9"
+      },
+      "type": "financial_status_indicator"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 1,
+      "name": "Regular Two-Sided Open",
+      "sip_mapping": {
+        "CTA": "R",
+        "UTP": "R"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "nbbo"
+      ],
+      "id": 2,
+      "name": "Regular One-Sided Open",
+      "sip_mapping": {
+        "UTP": "Y"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 3,
+      "name": "Slow Ask",
+      "sip_mapping": {
+        "CTA": "A"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 4,
+      "name": "Slow Bid",
+      "sip_mapping": {
+        "CTA": "B"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 5,
+      "name": "Slow Bid and Ask",
+      "sip_mapping": {
+        "CTA": "H"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 6,
+      "name": "Slow Due LRP Bid",
+      "sip_mapping": {
+        "CTA": "E"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 7,
+      "name": "Slow Due LRP Ask",
+      "sip_mapping": {
+        "CTA": "F"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 9,
+      "name": "Slow Due Set Slow List Bid Ask",
+      "sip_mapping": {
+        "CTA": "W",
+        "UTP": "W"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 10,
+      "name": "Manual Ask Automated Bid",
+      "sip_mapping": {
+        "UTP": "A"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 11,
+      "name": "Manual Bid Automated Ask",
+      "sip_mapping": {
+        "UTP": "B"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 12,
+      "name": "Manual Bid and Ask",
+      "sip_mapping": {
+        "UTP": "H"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 13,
+      "name": "Opening",
+      "sip_mapping": {
+        "CTA": "O",
+        "UTP": "O"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo"
+      ],
+      "id": 14,
+      "name": "Closing",
+      "sip_mapping": {
+        "CTA": "C"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 15,
+      "name": "Closed",
+      "sip_mapping": {
+        "UTP": "L"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 16,
+      "name": "Resume",
+      "sip_mapping": {
+        "CTA": "T",
+        "UTP": "T"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo"
+      ],
+      "id": 17,
+      "name": "Fast Trading",
+      "sip_mapping": {
+        "UTP": "F"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 18,
+      "name": "Trading Range Indication",
+      "sip_mapping": {
+        "CTA": "G",
+        "UTP": "G"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo"
+      ],
+      "id": 19,
+      "name": "Market Maker Quotes Closed",
+      "sip_mapping": {
+        "CTA": "L"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo"
+      ],
+      "id": 20,
+      "name": "Non-Firm",
+      "sip_mapping": {
+        "CTA": "N",
+        "UTP": "N"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 21,
+      "name": "News Dissemination",
+      "sip_mapping": {
+        "CTA": "J",
+        "UTP": "J"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo"
+      ],
+      "id": 22,
+      "name": "Order Influx",
+      "sip_mapping": {
+        "UTP": "X"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo"
+      ],
+      "id": 23,
+      "name": "Order Imbalance",
+      "sip_mapping": {
+        "UTP": "I"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 26,
+      "legacy": true,
+      "name": "Additional Information",
+      "sip_mapping": {
+        "CTA": "M",
+        "UTP": "M"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 27,
+      "name": "News Pending",
+      "sip_mapping": {
+        "CTA": "P",
+        "UTP": "P"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 28,
+      "name": "Additional Information Due To Related Security",
+      "sip_mapping": {
+        "CTA": "Q",
+        "UTP": "Q"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 29,
+      "name": "Due To Related Security",
+      "sip_mapping": {
+        "CTA": "S",
+        "UTP": "S"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 30,
+      "name": "In View Of Common",
+      "sip_mapping": {
+        "CTA": "V",
+        "UTP": "V"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 30,
+      "legacy": true,
+      "name": "Equipment Changeover",
+      "sip_mapping": {
+        "CTA": "X",
+        "UTP": "X"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo"
+      ],
+      "id": 32,
+      "name": "No Open No Resume",
+      "sip_mapping": {
+        "CTA": "Z"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo"
+      ],
+      "id": 40,
+      "name": "On Demand Auction",
+      "sip_mapping": {
+        "CTA": "4",
+        "UTP": "4"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 41,
+      "name": "Cash Only Settlement",
+      "sip_mapping": {
+        "CTA": "A"
+      },
+      "type": "settlement_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 42,
+      "name": "Next Day Settlement",
+      "sip_mapping": {
+        "CTA": "B"
+      },
+      "type": "settlement_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 43,
+      "name": "LULD Trading Pause",
+      "sip_mapping": {
+        "CTA": "M",
+        "UTP": "M"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo"
+      ],
+      "id": 71,
+      "name": "Slow Due LRP Bid and Ask",
+      "sip_mapping": {
+        "CTA": "U"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 81,
+      "name": "Corrected Price Indication",
+      "sip_mapping": {
+        "UTP": "C"
+      },
+      "type": "quote_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 82,
+      "name": "SIP Generated",
+      "sip_mapping": {
+        "UTP": "E"
+      },
+      "type": "sip_generated_flag"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 84,
+      "name": "Crossed Market",
+      "sip_mapping": {
+        "CTA": "A"
+      },
+      "type": "market_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 85,
+      "name": "Locked Market",
+      "sip_mapping": {
+        "CTA": "B"
+      },
+      "type": "market_condition"
+    },
+    {
+      "asset_class": "stocks",
+      "data_types": [
+        "bbo",
+        "nbbo"
+      ],
+      "id": 94,
+      "name": "CQS Generated",
+      "sip_mapping": {
+        "CTA": "S"
+      },
+      "type": "sip_generated_flag"
+    }
+  ]
+}

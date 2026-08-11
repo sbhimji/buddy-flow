@@ -1,7 +1,7 @@
 {
   "version": "2.0",
   "generated_from": "MORNING-TAPE-baskets-v2.docx",
-  "note": "CONFIRMED BY TRADER 2026-08-09 - source of truth. Selection criteria and review cadence are trader-owned, not engineering. SPCX added to space basket (IPO 2026-06-12).",
+  "note": "CONFIRMED BY TRADER 2026-08-09 - source of truth. Selection criteria and review cadence are trader-owned, not engineering. SPCX added to space basket (IPO 2026-06-12). AMENDED 2026-08-10 (trader-confirmed): PSTG -> P (Pure Storage renamed Everpure, NYSE: P, 2026-03); CFLT removed from consumption_software (IBM acquisition closed 2026-03-17, delisted; no replacement named).",
   "settings": {
     "weighting": "equal",
     "min_price_usd": 3.0,
@@ -171,7 +171,7 @@
         "SIMO",
         "PENG",
         "NTAP",
-        "PSTG"
+        "P"
       ],
       "benchmark": "SMH",
       "note": "DRAM/NAND/HDD + controllers + modules + storage systems. SK Hynix untrackable on US feed (optional EWY overlay)"
@@ -377,7 +377,6 @@
         "MDB",
         "SNOW",
         "NET",
-        "CFLT",
         "ESTC",
         "TWLO"
       ],

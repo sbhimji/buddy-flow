@@ -3,7 +3,7 @@
 > Full sector coverage + high-volume names per PM directive. Companion to Build Spec v2.0.
 > Machine-readable source of truth: `morning-tape-baskets-v2.json` (identical contents; engine reads the JSON).
 >
-> **Engineering annotations** from spec review are marked ⚠ — see docs/dev-plan-v1.md fix list.
+> **Engineering annotations** from spec review are marked ⚠ — see docs/DEV-PLAN.md fix list.
 
 ## 1. Benchmark / ETF Universe
 
@@ -30,7 +30,7 @@ Equal-weight v1. Each basket's ratio computes against its ASSIGNED benchmark bel
 | semis_compute | NVDA, AMD, ARM, INTC, TSM, QCOM | SMH | Core compute silicon. NVDA double-counted with proof-tier intentionally |
 | networking_connectivity | ANET, AVGO, MRVL, ALAB, CRDO, CSCO, CIEN | SMH | Switching, custom ASIC, DSPs, retimers, optical systems |
 | semis_analog_power_auto | TXN, ADI, NXPI, MCHP, ON, STM, SWKS, QRVO | SOXX | Analog/auto/industrial semis — the cyclical recovery gauge |
-| memory_storage | MU, SNDK, WDC, STX, SIMO, PENG, NTAP, PSTG | SMH | DRAM/NAND/HDD + controllers + modules + storage systems. SK Hynix untrackable on US feed (optional EWY overlay) |
+| memory_storage | MU, SNDK, WDC, STX, SIMO, PENG, NTAP, P | SMH | DRAM/NAND/HDD + controllers + modules + storage systems. SK Hynix untrackable on US feed (optional EWY overlay) |
 | photonics_optics | AAOI, COHR, LITE, VIAV, FN, MTSI, SMTC, CIEN, GLW, POET | SMH | SHARED TAIL: China InP export-permit headlines move whole basket — treat basket-wide gaps as ONE event, suppress per-member divergence alerts 30min |
 | semicap_frontend | AMAT, LRCX, KLAC, ASML, TER, ENTG, MKSI, AEIS, ACMR, UCTT | SMH | Wafer fab equipment + subsystems |
 | packaging_test_substrates | CAMT, ONTO, KLIC, FORM, BESIY, AXTI | SMH | HBM/advanced packaging inspection, bonding, probe + compound-semi substrates (AXTI = InP/GaAs, China-located fabs — dual-flag). BESIY ADR wide-spread filter |
@@ -45,7 +45,7 @@ Equal-weight v1. Each basket's ratio computes against its ASSIGNED benchmark bel
 | fuel_cells_storage | BE, PLUG, FCEL, BLDP, FLNC, EOSE | XLI | On-site generation + grid batteries. High-beta retail tier of the power trade |
 | nuclear_fuel_cycle | CEG, VST, TLN, NRG, OKLO, SMR, NNE, LEU, CCJ, UEC, DNN, UUUU, BWXT, CW, FLR | URA | Operators + SMR developers + enrichment/miners + components/engineering. Split from power_equipment: different rate-sensitivity and revenue horizon |
 | epc_labor | IESC, MYRG, EME, FIX, PWR, DY, STRL, PRIM | XLI | Electrical/data-center contractors — the labor bottleneck; uncrowded layer. Early ignition = institutional discovery signal |
-| consumption_software | DDOG, MDB, SNOW, NET, CFLT, ESTC, TWLO | IGV | Usage-billed software — lagged derivative of cloud consumption |
+| consumption_software | DDOG, MDB, SNOW, NET, ESTC, TWLO | IGV | Usage-billed software — lagged derivative of cloud consumption |
 | robotics_av | TSLA, ISRG, SYM, SERV, PONY | QQQ | The rotation destination the crowd is entering per PM read — track for ignition confirmation |
 
 ## 3. Engine Rules Bound to This Config
@@ -60,6 +60,8 @@ Equal-weight v1. Each basket's ratio computes against its ASSIGNED benchmark bel
 - ⚠ "Ratio z vs assigned benchmark" is not defined in Build Spec §2 (which defines RelPerf vs SPY only). Assigned-benchmark version supersedes for basket tiles; SPY-relative retained for regime header. Reconcile in dev plan story 3.6.
 
 ## 4. Maintenance
+
+**2026-08-10 (trader-confirmed):** PSTG → P (Pure Storage renamed Everpure, NYSE: P, March 2026); CFLT removed from consumption_software (IBM acquisition closed 2026-03-17, delisted — no replacement named). Universe: 165 unique members + benchmarks ≈ 192 symbols.
 
 PM reviews membership after every earnings cycle and on any thesis change. All edits flow through `morning-tape-baskets-v2.json`; this document regenerates from it. Total tracked universe: ~170 symbols incl. benchmarks — well within a single Databento websocket subscription.
 

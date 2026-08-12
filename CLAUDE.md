@@ -1,15 +1,15 @@
 # MORNING TAPE
 
 Real-time money-flow observation instrument. One screen showing where dollar volume is
-concentrating across a ~193-symbol universe (166 basket members + benchmarks) grouped into
+concentrating across a ~191-symbol universe (164 basket members + benchmarks) grouped into
 22 baskets, whether it is rotating, and whether the buying is broad and aggressive or thin
 and passive. Primary user moment: 09:30–10:30 ET.
 
 **Status: pre-code.** The repo currently contains only `docs/`. Read these before doing
 anything substantive:
 
-- `docs/MORNING-TAPE-build-spec-v2.md` — what the product is; §2 is the math and *is* the product.
-- `docs/morning-tape-dev-plan-v1.md` — the operative plan. Phases 0–6, stories, the 19-item
+- `docs/INITIAL-PROJECT.md` — the build spec: what the product is; §2 is the math and *is* the product.
+- `docs/DEV-PLAN.md` — the operative plan. Phases 0–6, stories, the 19-item
   fix list (Appendix A), the trader Decision Sheet (Appendix B), post-review amendments
   (Appendix C).
 - `docs/foundations/baskets.md` — basket/benchmark universe, human-readable, with ⚠ engineering
@@ -17,6 +17,8 @@ anything substantive:
   (the engine reads the JSON; the md regenerates from it; PM edits config, never code —
   hot-reload required). Trader-confirmed 2026-08-09. Universe selection criteria and review
   cadence are the trader's, not engineering's — don't ask for or invent them.
+- `docs/foundations/data.md` — data source of truth: vendor (Massive Stocks Advanced),
+  live channels and fields, historical endpoints, cadence, deferred items.
 
 When the two disagree, **the dev plan wins** — it exists to correct the spec. Appendix A maps
 each correction to its home story.

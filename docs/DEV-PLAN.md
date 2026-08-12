@@ -19,10 +19,14 @@ Goal: every ambiguity that can block a later story is resolved or explicitly def
 - ~~Include reference instruments: SPY, BIL, SGOV, bond proxies for the header.~~ In config: broad/cash-proxy/duration benchmarks + ZN/ZB.
 - Carried to first code (loader module): effective-date/versioning mechanism; *done when* config loads, validates (no orphan tickers, no empty baskets), and a membership change produces a new version without touching history.
 
-**0.2 — Data vendor setup**
-- Sign up / verify: Databento consolidated trades+NBBO (spine), Polygon Advanced (failover), Unusual Whales (existing license, overlay only — deferred to Phase 6).
-- Confirm entitlements cover TRF venue codes, condition codes, and auction cross flags.
-- *Done when:* both live websockets stream the full universe during market hours from a test script.
+**~~0.2 — Data vendor setup~~** ✅ resolved 2026-08-11
+- *Status:* vendor = **Massive Stocks Advanced** (massive.com, the former Polygon.io), real-time SIP consolidated feed — supersedes the Databento/Polygon language below (Databento has no consolidated equities dataset until EQUS.SIP ships). Source of truth: `docs/foundations/data.md`; verification results: `docs/temp/0.2-results.md`.
+- ~~Sign up / verify: Databento consolidated trades+NBBO (spine), Polygon Advanced (failover), Unusual Whales (existing license, overlay only — deferred to Phase 6).~~ Massive Stocks Advanced provides SIP consolidated trades, NBBO quotes, condition codes, TRF venue attribution, LULD + imbalance channels, and 20+yr historical. Unusual Whales overlay still deferred to Phase 6.
+- ~~Confirm entitlements cover TRF venue codes, condition codes, and auction cross flags.~~ Entitlements verified by scripts 2026-08-11 (`discovery-scripts/verify-universe`, `verify-feed`): 190/190 universe symbols resolve; live websocket entitled and streaming (NVDA 5-min: 42k trades / 33k quotes, latency p95 = 104ms vs 5000ms budget); 94 condition codes dumped to `docs/foundations/massive-conditions.json` for story 0.3.
+- **Deferred:**
+  - **Failover feed** — spec's dual-feed requirement deliberately deferred: Databento EQUS.SIP (late Q3/Q4 2026) is the intended second feed; revisit at story 6.1.
+  - **Bond tape (ZN/ZB)** — backlogged (see 5.2 note).
+  - ~~**BESIY** — 2026-08-11 probe: does not stream on the real-time websocket (OTC prints are REST-only; no NBBO exists at the vendor, so no Lee-Ready either). Keep/drop/replace pending trader decision.~~ Resolved 2026-08-11: trader dropped BESIY (config amended, no replacement named; universe now 164 members / 189 equity symbols).
 
 **0.3 — Print-inclusion policy [F9]**
 - Written policy for which prints count toward flow metrics: handling of out-of-sequence trades, cancels/corrections, average-price and other derivative prints, odd lots, opening/closing crosses (crosses tracked separately per §4, not blended into continuous flow).
@@ -43,7 +47,7 @@ Goal: every ambiguity that can block a later story is resolved or explicitly def
 Goal: live data flows in, every session is recorded, and any recorded session can be replayed deterministically. Replay is the development environment for the entire rest of the project (the market is only open 09:30–16:00 ET weekdays; replay is what makes evening/weekend work possible).
 
 **1.1 — Ingest skeleton & throughput floor [F8]**
-- Hot path in a compiled/concurrent-safe stack (Go/Rust/Java, or carefully structured async with the hot loop out of pure Python). Stated requirement: sustain ≥ 20k messages/sec (trades+quotes) through the 09:30 burst with zero drops. **Raised to ≥ 50k msg/sec** per baskets-v2 config: the universe is ~193 symbols incl. benchmarks (166 unique members + 27 benchmarks/futures), not the spec's ~60 — verify Databento tier pricing at this symbol count, and note ZN/ZB bond-gate futures are a separate Databento dataset (CME) not covered by the equities feed.
+- Hot path in a compiled/concurrent-safe stack (Go/Rust/Java, or carefully structured async with the hot loop out of pure Python). Stated requirement: sustain ≥ 20k messages/sec (trades+quotes) through the 09:30 burst with zero drops. **Raised to ≥ 50k msg/sec** per baskets-v2 config: the universe is ~192 symbols incl. benchmarks (165 unique members + 27 benchmarks/futures; 2026-08-10 amendment), not the spec's ~60 — verify Databento tier pricing at this symbol count, and note ZN/ZB bond-gate futures are a separate Databento dataset (CME) not covered by the equities feed.
 - Maintains in-memory current NBBO per ticker (the Lee-Ready lookup table).
 - Evaluate APEX ingestion reuse here: if its feed handlers, reconnect logic, or storage match, port rather than rewrite; reuse is already assumed by the original spec's 60–80% figure.
 - *Done when:* one full live session ingested with message counts matching vendor-reported totals.
@@ -63,6 +67,14 @@ Goal: live data flows in, every session is recorded, and any recorded session ca
 - Persist every computed metric per bucket as it comes to exist in later phases (design principle: **store everything, model nothing** — this is the future-ML dataset, the replay scrubber's source, and the grading ledger's input, all for free).
 - Zero-trade buckets: FlowShare 0/positive = 0; define 0/0 (whole universe silent) as carry-forward-blank and render as gap [F13 addendum].
 - *Done when:* buckets from a replayed session match a hand-computed sample and derived 1-minute bars equal the sum of their 1-second bars.
+
+**1.5 — Ingest data-quality monitoring**
+- Counters/distributions computed inside the ingest path, surfaced two ways: live in the 3.0 developer view, and as a nightly data-quality block in the grading ledger. Loud logs only in v1 — 6.3 owns real alerting. Consumes the 0.3 condition-code table and 3.3's NBBO ring-buffer window. These metrics answer one question: *is the data feeding the map trustworthy right now?*
+- Agreed metrics:
+  - **Late-print lag distribution** — `report_ts − execution_ts` per print, tracked per venue class (exchange / TRF / out-of-sequence). Tunes the 3.3 ring-buffer window from measured reality; detects a venue reporting later than normal. Nightly: p50/p95/p99/max to ledger.
+  - **Unaccounted condition codes** — any print whose code combination isn't in the 0.3 table: count, first-seen, one sample print. Default treatment applies (count volume, don't classify, log loudly); nonzero nightly count = a ledger line for a human to classify into the table.
+- Proposed metrics (trim at mini-spec time): classification-quality shares (ask/bid/tick-rule/unclassified %, per 3.3); message-count reconciliation vs vendor totals (1.1's done-when made a permanent nightly check); sequence-gap counter (proof of dropped messages; failover trigger input for 6.1); feed liveness/silence per symbol group (distinguishes "quiet ticker" from "symbology break"); quote staleness at classification (p95 spike = delta untrustworthy); crossed/locked NBBO time (feeds D9); ingest throughput + queue depth + per-stage latency (proves the 50k floor; feeds 6.2); clock drift (`receive_ts − exchange_ts`); capture-file integrity + disk headroom (a truncated capture is an unrunnable replay); halt detection (LULD status — a halted ticker prints zero volume and would misread as "abandonment" in 3.7; touches breadth denominators and tile rendering, so may deserve promotion to its own story).
+- *Done when:* agreed metrics visible in the 3.0 dev view during a replayed session; nightly ledger entry contains the session's data-quality block; replaying the same capture twice produces identical monitoring numbers (determinism applies to the monitors too).
 
 ---
 
@@ -102,6 +114,7 @@ Each story: mini-spec → implement → unit tests → verify on replay → watc
 
 **3.3 — Lee-Ready & signed volume [F2]**
 - Aggressor classification against in-memory NBBO: at/above ask = buy, at/below bid = sell, midpoint = tick rule. NetDelta and DeltaRatio per basket per bucket.
+- **Initial idea — classification cascade (2026-08-10, revisit at mini-spec time):** Databento's trades schema carries a venue-supplied `side` field (B = buyer-initiated, A = seller-initiated, N = not stated; expect N on TRF/off-exchange prints, which have no lit matching engine). Proposed order of preference: (1) venue `side` A/B — ground truth from the matching engine, use directly; (2) N → quote-relative classification vs NBBO at execution time (ring-buffer lookup); (3) midpoint/ambiguous → tick rule (compare vs last different trade price — weakest classifier, last resort); (4) still nothing (e.g. print older than ring-buffer window) → unclassified. Unclassified volume counts in DeltaRatio's denominator but not the numerator — uncertainty dampens the signal toward 0 rather than biasing it. Cross-check idea for 1.5: score our quote-relative classifier against venue side on A/B prints (off hot path) to get a measured accuracy rate for what we're applying to the N prints.
 - Open-degradation policy [F2]: DeltaRatio suppressed or visually flagged for the first N seconds after 09:30:00 while quotes are wide/crossed (Decision D9, default 30s). Document that midpoint/price-improved retail executions fall to the tick rule and that DeltaRatio is an aggregate approximation, not print-level truth.
 - *Done when:* replayed classification rates (buy%/sell%/tick-rule%) are stable across two runs and the tick-rule share is reported as a data-quality metric.
 
@@ -152,7 +165,7 @@ Each story: mini-spec → implement → unit tests → verify on replay → watc
 - Concentration stat **[A8]**: render the top member's share of basket dollar volume on the tile when it exceeds 50% (e.g., "NVDA 63%") — a >50% tile is honestly "<leader> + friends" and the PM should read it that way. Computed in 3.1; always available in the detail view.
 
 **5.2 — Header**
-- Line 1: mechanical regime sentence from 3.7 (DE-GROSSING / rotation-correlational / RE-GROSSING / CHOP). Line 2: 10Y/30Y level + velocity z (σ guard applies).
+- Line 1: mechanical regime sentence from 3.7 (DE-GROSSING / rotation-correlational / RE-GROSSING / CHOP). Line 2: 10Y/30Y level + velocity z (σ guard applies) — **BACKLOG (2026-08-09): bond tape (ZN/ZB, separate CME dataset) deferred; v1 ships header line 1 only.** TLT (in universe) available as interim duration proxy if wanted.
 - No buy/sell language anywhere in the UI (§7); audit strings against [F1] — the product's honest claim is the cross-basket share view with matched baselines, not "delta that no retail tool has."
 
 **5.3 — Replay scrubber**

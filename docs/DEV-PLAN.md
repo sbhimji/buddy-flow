@@ -26,7 +26,7 @@ Goal: every ambiguity that can block a later story is resolved or explicitly def
 - **Deferred:**
   - **Failover feed** — spec's dual-feed requirement deliberately deferred: Databento EQUS.SIP (late Q3/Q4 2026) is the intended second feed; revisit at story 6.1.
   - **Bond tape (ZN/ZB)** — backlogged (see 5.2 note).
-  - **BESIY** — 2026-08-11 probe: does not stream on the real-time websocket (OTC prints are REST-only; no NBBO exists at the vendor, so no Lee-Ready either). Keep/drop/replace pending trader decision.
+  - ~~**BESIY** — 2026-08-11 probe: does not stream on the real-time websocket (OTC prints are REST-only; no NBBO exists at the vendor, so no Lee-Ready either). Keep/drop/replace pending trader decision.~~ Resolved 2026-08-11: trader dropped BESIY (config amended, no replacement named; universe now 164 members / 189 equity symbols).
 
 **0.3 — Print-inclusion policy [F9]**
 - Written policy for which prints count toward flow metrics: handling of out-of-sequence trades, cancels/corrections, average-price and other derivative prints, odd lots, opening/closing crosses (crosses tracked separately per §4, not blended into continuous flow).

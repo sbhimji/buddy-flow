@@ -1,12 +1,11 @@
 {
   "version": "2.0",
   "generated_from": "MORNING-TAPE-baskets-v2.docx",
-  "note": "CONFIRMED BY TRADER 2026-08-09 - source of truth. Selection criteria and review cadence are trader-owned, not engineering. SPCX added to space basket (IPO 2026-06-12). AMENDED 2026-08-10 (trader-confirmed): PSTG -> P (Pure Storage renamed Everpure, NYSE: P, 2026-03); CFLT removed from consumption_software (IBM acquisition closed 2026-03-17, delisted; no replacement named).",
+  "note": "CONFIRMED BY TRADER 2026-08-09 - source of truth. Selection criteria and review cadence are trader-owned, not engineering. SPCX added to space basket (IPO 2026-06-12). AMENDED 2026-08-10 (trader-confirmed): PSTG -> P (Pure Storage renamed Everpure, NYSE: P, 2026-03); CFLT removed from consumption_software (IBM acquisition closed 2026-03-17, delisted; no replacement named). AMENDED 2026-08-11 (trader decision): BESIY dropped from packaging_test_substrates (OTC ADR - does not stream on the Massive real-time websocket, no NBBO exists at the vendor; story 0.2 probe); no replacement named.",
   "settings": {
     "weighting": "equal",
     "min_price_usd": 3.0,
     "adr_wide_spread_filter": [
-      "BESIY",
       "STM",
       "ASML",
       "TSM"
@@ -214,11 +213,10 @@
         "ONTO",
         "KLIC",
         "FORM",
-        "BESIY",
         "AXTI"
       ],
       "benchmark": "SMH",
-      "note": "HBM/advanced packaging inspection, bonding, probe + compound-semi substrates (AXTI = InP/GaAs, China-located fabs - dual-flag). BESIY ADR wide-spread filter"
+      "note": "HBM/advanced packaging inspection, bonding, probe + compound-semi substrates (AXTI = InP/GaAs, China-located fabs - dual-flag)"
     },
     "defense_primes": {
       "members": [

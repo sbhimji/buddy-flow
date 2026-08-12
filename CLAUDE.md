@@ -1,7 +1,7 @@
 # MORNING TAPE
 
 Real-time money-flow observation instrument. One screen showing where dollar volume is
-concentrating across a ~192-symbol universe (165 basket members + benchmarks) grouped into
+concentrating across a ~191-symbol universe (164 basket members + benchmarks) grouped into
 22 baskets, whether it is rotating, and whether the buying is broad and aggressive or thin
 and passive. Primary user moment: 09:30–10:30 ET.
 

@@ -13,9 +13,9 @@ Go client: local copy at `../client-go` (`github.com/massive-com/client-go/v3`).
 ## Universe
 
 `docs/foundations/morning-tape-baskets-v2.json` — the machine-readable basket config
-(trader-owned). 165 basket members + benchmarks, minus the backlogged ZN/ZB futures
-= **190 equity symbols** subscribed/queried. Known flag: BESIY is OTC (`market=otc`) —
-websocket coverage pending empirical check.
+(trader-owned). 164 basket members + benchmarks, minus the backlogged ZN/ZB futures
+= **189 equity symbols** subscribed/queried. (BESIY dropped 2026-08-11 by trader
+decision: OTC, does not stream on the real-time websocket, no NBBO at the vendor.)
 
 ## Live — websocket `wss://socket.massive.com/stocks`
 

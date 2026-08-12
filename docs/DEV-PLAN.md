@@ -19,10 +19,14 @@ Goal: every ambiguity that can block a later story is resolved or explicitly def
 - ~~Include reference instruments: SPY, BIL, SGOV, bond proxies for the header.~~ In config: broad/cash-proxy/duration benchmarks + ZN/ZB.
 - Carried to first code (loader module): effective-date/versioning mechanism; *done when* config loads, validates (no orphan tickers, no empty baskets), and a membership change produces a new version without touching history.
 
-**0.2 — Data vendor setup**
-- Sign up / verify: Databento consolidated trades+NBBO (spine), Polygon Advanced (failover), Unusual Whales (existing license, overlay only — deferred to Phase 6).
-- Confirm entitlements cover TRF venue codes, condition codes, and auction cross flags.
-- *Done when:* both live websockets stream the full universe during market hours from a test script.
+**~~0.2 — Data vendor setup~~** ✅ resolved 2026-08-11
+- *Status:* vendor = **Massive Stocks Advanced** (massive.com, the former Polygon.io), real-time SIP consolidated feed — supersedes the Databento/Polygon language below (Databento has no consolidated equities dataset until EQUS.SIP ships). Source of truth: `docs/foundations/data.md`; verification results: `docs/temp/0.2-results.md`.
+- ~~Sign up / verify: Databento consolidated trades+NBBO (spine), Polygon Advanced (failover), Unusual Whales (existing license, overlay only — deferred to Phase 6).~~ Massive Stocks Advanced provides SIP consolidated trades, NBBO quotes, condition codes, TRF venue attribution, LULD + imbalance channels, and 20+yr historical. Unusual Whales overlay still deferred to Phase 6.
+- ~~Confirm entitlements cover TRF venue codes, condition codes, and auction cross flags.~~ Entitlements verified by scripts 2026-08-11 (`discovery-scripts/verify-universe`, `verify-feed`): 190/190 universe symbols resolve; live websocket entitled and streaming (NVDA 5-min: 42k trades / 33k quotes, latency p95 = 104ms vs 5000ms budget); 94 condition codes dumped to `docs/foundations/massive-conditions.json` for story 0.3.
+- **Deferred:**
+  - **Failover feed** — spec's dual-feed requirement deliberately deferred: Databento EQUS.SIP (late Q3/Q4 2026) is the intended second feed; revisit at story 6.1.
+  - **Bond tape (ZN/ZB)** — backlogged (see 5.2 note).
+  - **BESIY** — 2026-08-11 probe: does not stream on the real-time websocket (OTC prints are REST-only; no NBBO exists at the vendor, so no Lee-Ready either). Keep/drop/replace pending trader decision.
 
 **0.3 — Print-inclusion policy [F9]**
 - Written policy for which prints count toward flow metrics: handling of out-of-sequence trades, cancels/corrections, average-price and other derivative prints, odd lots, opening/closing crosses (crosses tracked separately per §4, not blended into continuous flow).

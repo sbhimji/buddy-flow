@@ -148,7 +148,7 @@ func TestCaptureRoundtripAndTornTail(t *testing.T) {
 
 	// Replay: the good frames flow, the torn tail is skipped, no error.
 	table, p, finish := newTestPipeline(t, "NVDA")
-	stats, err := StreamCapture(path, p)
+	stats, err := StreamCapture(path, p, ReplayOptions{})
 	finish()
 	if err != nil {
 		t.Fatalf("replay must tolerate a torn tail, got: %v", err)

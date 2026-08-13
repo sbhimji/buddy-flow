@@ -53,17 +53,18 @@ Goal: live data flows in, every session is recorded, and any recorded session ca
 - ~~Evaluate APEX ingestion reuse here~~ **Closed 2026-08-13: no reuse** — APEX was built against a different vendor; nothing ports.
 - *Done when:* per mini-spec — all four criteria passed 2026-08-13 (see Status). (Live-session reconciliation vs vendor totals becomes a permanent nightly check once live runs begin — 1.5.)
 
-**1.2 — Live feeder & capture to disk**
-- **Live websocket feeder** (moved here from 1.1, 2026-08-13): connect `wss://socket.massive.com/stocks`, subscribe `T.`/`Q.` for the 189 universe symbols, decode into the `internal/ingest` structs (ms→ns timestamp scaling; `pt` field absent from the vendor Go client — parse raw JSON, confirm on the wire). Capture-before-parse lives inside the socket read loop, which is why feeder and capture are one story.
-- Every raw message (both feeds) appended to per-session capture files with receive timestamps. Capture is unconditional from the first live run — recorded sessions are the project's test corpus.
+**1.2 — Live feeder & capture to disk** — mini-spec: `docs/mini-specs/1.2-live-feeder-capture.md` — **3 of 4 done-when criteria passed 2026-08-13**
+- *Status:* live feeder + capture built, reviewed (10-finding review applied same day), and verified on real market data: smoke capture over the 08-13 close (954MB→1.0GB, 876k frames, 3.12M T + 3.40M Q, zero decode errors/unknown symbols); replay-twice bit-identical with counts matching live exactly (criterion 2 ✅); kill-drill passed — SIGKILL mid-stream detected via stale manifest, restart appended with exact resume provenance (`prior+this-run == total == file size`), torn line skipped, replay clean (criterion 3 ✅); criterion 1 (live session captured with manifest) ✅. **Open: criterion 4** — live counts vs vendor flat file reconciliation, blocked until Massive publishes the next session's file (~evening after). Live-wire discoveries for `data.md`: quotes carry `pt`; trades carry undocumented `ds`.
+- ~~**Live websocket feeder** (moved here from 1.1, 2026-08-13): connect `wss://socket.massive.com/stocks`, subscribe `T.`/`Q.` for the 189 universe symbols, decode into the `internal/ingest` structs (ms→ns timestamp scaling; `pt` field absent from the vendor Go client — parse raw JSON, confirm on the wire). Capture-before-parse lives inside the socket read loop, which is why feeder and capture are one story.~~ Done (`internal/feed/live.go`, `internal/capture`, `cmd/capture`); fatal-stop on auth failure/unwritable capture, reconnect with backoff-reset + gap control records.
+- ~~Every raw message (both feeds) appended to per-session capture files with receive timestamps. Capture is unconditional from the first live run — recorded sessions are the project's test corpus.~~ Done — raw frames (not decoded structs), `<recv_ns> <frame>` lines, no off-switch.
 - Immediately record: several ordinary sessions, at least one boring low-volatility day, and (as they occur) a macro morning. Obtain/record the §6 reference days: the SNDK guide-night open, the VIAV→optics morning, a known de-grossing day.
-- *Done when:* a session capture replays through the ingest path and produces identical message counts and identical bucket outputs twice [§5 Days 1–3 "Done when"].
+- *Done when:* a session capture replays through the ingest path and produces identical message counts ~~and identical bucket outputs~~ twice [§5 Days 1–3 "Done when"]. *(Amended at mini-spec: bucket outputs belong to 1.4 — buckets don't exist yet. Counts+NBBO verified ✅; the story closes on criterion 4 + first full-session capture.)*
 
-**1.3 — Replay harness**
-- Replays a capture file through the full pipeline at configurable speed (real-time, accelerated, instant), driving the same code paths as live.
-- Extract a shared flat-file reader while restructuring here (2026-08-13 review): the open/gz-sniff/header-map/conditions-parse logic is currently duplicated near-verbatim between `internal/feed` and `internal/classify`'s acceptance test — the test that reads real session data should guard the real reader.
-- Deterministic: same capture in → bit-identical metrics out.
-- *Done when:* every subsequent story's acceptance tests run against replay, not live.
+**~~1.3 — Replay harness~~** ✅ resolved 2026-08-13 — mini-spec: `docs/mini-specs/1.3-replay-harness.md`
+- *Status:* closed same day. `-speed` on `cmd/ingest -capture`: 0=instant, 1=real-time (absolute-schedule pacing by capture recv_ns; measured exact to ~1ms on a 3s slice), N=accelerated; 30s cap on dead gaps. Content identical at every speed (verified instant vs ×100 on the full 08-13 capture). The shared flat-file reader extraction moved to `docs/backlog.md` (no second CSV consumer yet; recorded, not dropped).
+- ~~Replays a capture file through the full pipeline at configurable speed (real-time, accelerated, instant), driving the same code paths as live.~~ Done — replay feeds the production live decoder (1.2 design).
+- ~~Deterministic: same capture in → bit-identical metrics out.~~ Verified across speeds.
+- *Done when:* every subsequent story's acceptance tests run against replay, not live. **Standing rule from here on.**
 
 **1.4 — Bucket store [F7]**
 - Store at 1-second resolution for the entire session, all day (cheap at 60 tickers); 1-minute and rolling views are *derived*, never a second storage format. This removes the 10:00 resolution seam that would otherwise distort CUSUM and slopes.

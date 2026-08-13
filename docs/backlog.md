@@ -112,6 +112,18 @@ field on groups (e.g. `equity: false`) filtered on as data, not identity — but
 is trader-owned (D1), so this is a schema *proposal* to take to the trader, not an
 engineering edit. Until accepted, the group-name match stands, documented as fragile.
 
+## Shared flat-file reader extraction (LOW priority — refactor)
+
+**Logged:** 2026-08-13 (1.1 review; deferred again at 1.3 close). **Lands in:** a small
+`internal/flatfile` package when a second CSV consumer appears (candidate: the 2.1
+profile builder if it reads flat files rather than REST aggs).
+
+The open/gz-sniff/header-map/conditions-parse logic is duplicated near-verbatim between
+`internal/feed/file.go` and `internal/classify/acceptance_test.go`. Both copies are
+test-guarded, so divergence is caught — but the test that reads real session data should
+guard the production reader, not a sibling copy. Deferred at 1.3 close because replay
+runs on capture files (not CSV), leaving the CSV path with a single production consumer.
+
 ## Pre-market / post-market (extended hours) tracking (new display scope — trader input needed)
 
 **Logged:** 2026-08-13. **Lands in:** its own post-v1 story (Phase 6 earliest); touches

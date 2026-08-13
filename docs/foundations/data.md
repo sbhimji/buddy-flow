@@ -57,3 +57,5 @@ auction cross print (identified via condition codes).
   is the free interim duration proxy).
 - **EOD ETF creation/redemption scrape** (etf.com / Farside) — Phase 4 nightly grading.
 - **Market calendar** (holidays, half days) — needed by Phase 2 baselines; static file.
+  Extended 2026-08-12 (D4): also carries macro event dates (FOMC, CPI, PPI, NFP, OpEx
+  class) so baseline days can be flagged and the display can annotate "today is CPI."

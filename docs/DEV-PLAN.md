@@ -34,12 +34,11 @@ Goal: every ambiguity that can block a later story is resolved or explicitly def
 - ~~This policy is a dependency of every metric and of replay reproducibility; it is written *before* ingestion code, then encoded as a single classification function with table-driven tests.~~ Empirical notes from the acceptance run recorded in the policy doc (crosses print as 17/8/18 on both tapes — anchor logic keys on 17; official open/close rows duplicate cross size, excluded).
 - Carried: id 55 verification rides the runtime tripwire (`docs/backlog.md`); quote-condition validity is story 3.3's appendix.
 
-**0.4 — Trader Decision Sheet round 1**
-- Deliver Appendix B to the trader; collect D1–D6 (the items that block Phases 0–3). D7+ can wait for their phases.
+**~~0.4 — Trader Decision Sheet round 1~~** ✅ resolved 2026-08-12
+- *Status:* D1–D3 answered at 0.1. D4–D6 deliberately **not** taken to the trader — per the working split (trader sets direction, engineer owns specific requirements), the defaults were engineering-accepted 2026-08-12 with sharpened definitions (see Appendix B rows). All three are display-invisible and tunable at the nightly ledger review (6.5), so nothing is irreversible. D7+ wait for their phases; the earnings-day baseline refinement is the one item earmarked to eventually take back to the trader.
+- ~~Deliver Appendix B to the trader; collect D1–D6 (the items that block Phases 0–3). D7+ can wait for their phases.~~
 
-**0.5 — Spec reconciliation [A9] (open item)**
-- Obtain the trader's "Layers"-numbered spec version (references seen: "Layer 6" bond gate, "Layer 8" leadership-divergence detector) and reconcile its numbering with Build Spec v2's §-numbering.
-- The leadership-divergence detector is not described in any document currently held; capture its definition before scoping it into any phase (3.1's ex-leader flow series is its likely input — see [A8]).
+*(0.5 spec reconciliation [A9] removed from the plan 2026-08-12 — deferred to `docs/backlog.md`; Phase 0 closes without it.)*
 
 ---
 
@@ -222,9 +221,9 @@ One pass, answered in writing; defaults apply until overridden; the nightly ledg
 | ~~D1~~ | ~~Final universe + basket map~~ | **ANSWERED 2026-08-09**: baskets-v2 config, trader-confirmed | 0.1 |
 | ~~D2~~ | ~~Universe selection criteria & review cadence~~ | **RESOLVED**: trader-owned, out of engineering scope; cadence per baskets.md §4 | 0.1 |
 | ~~D3~~ | ~~Multi-basket membership allowed?~~ | **ANSWERED**: yes (7 overlapping members; F5a caveat applies) | 0.1 |
-| D4 | Baseline event-day exclusions (FOMC/CPI class) | Flag, include | 2.1 |
-| D5 | σ-floor fraction | 0.25× universe median σ | 2.2 |
-| D6 | Robust baseline estimator | Median/MAD | 2.1 |
+| ~~D4~~ | ~~Baseline event-day exclusions (FOMC/CPI class)~~ | **ENGINEERING-ACCEPTED 2026-08-12**: flag + include — safe under D6's robust estimator; needs macro-dates calendar (data.md). Member-earnings-day flag → backlog | 2.1 |
+| ~~D5~~ | ~~σ-floor fraction~~ | **ENGINEERING-ACCEPTED 2026-08-12**: 0.25× (config, not code), defined per series family per time-of-day bucket, recomputed nightly; σ_used = max(σ, floor); σ=0 → null. Guard runs before *every* z | 2.2 |
+| ~~D6~~ | ~~Robust baseline estimator~~ | **ENGINEERING-ACCEPTED 2026-08-12**: median/MAD with 1.4826 consistency factor; MAD=0 (common on thin buckets) falls to the D5 floor | 2.1 |
 | D7 | Breadth dead-band | ±10 bps vs SPY | 3.2 |
 | D8 | Breadth/RelPerf reference point | Since open | 3.2, 3.6 |
 | D9 | DeltaRatio open-suppression window | 30 s | 3.3 |
@@ -241,6 +240,6 @@ Accepted stakeholder amendments, numbered per the review discussion (only the it
 |---|------|-----------|
 | A6 | Overlapping-basket fix: cross-basket narrative (CUSUM, header sentences, pairwise rotation claims) computes on auto-generated disjoint sets with disjoint-set baselines; degeneracy guard (<3 members or <~30% of avg $vol → suppress narrative, log to ledger); display keeps full membership | 3.7 |
 | A8 | Per-tile concentration stat: top member's share of basket dollar volume, always computed, rendered when >50% | 3.1, 5.1 |
-| A9 | Obtain and reconcile the trader's "Layers"-numbered spec (Layer 6 bond gate, Layer 8 leadership-divergence detector — latter undocumented here) | 0.5 |
+| A9 | Obtain and reconcile the trader's "Layers"-numbered spec (Layer 6 bond gate, Layer 8 leadership-divergence detector — latter undocumented here) | backlog (was 0.5, deferred 2026-08-12) |
 
 Note: A6 presupposes multi-basket membership (e.g., NVDA in both semis_compute and proof_tier), which effectively answers **D3 = multi allowed** — 0.1's [F5a] caveat (shares no longer sum to 100% across baskets) therefore applies and must be documented.

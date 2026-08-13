@@ -30,6 +30,7 @@ func main() {
 		basketsPath = flag.String("baskets", "docs/foundations/morning-tape-baskets-v2.json", "trader-owned basket config (universe source of truth)")
 		tradesPath  = flag.String("trades", "", "trades flat file (.csv or .csv.gz); empty = skip")
 		quotesPath  = flag.String("quotes", "", "quotes flat file (.csv or .csv.gz); empty = skip")
+		capturePath = flag.String("capture", "", "captured live session (stream.jsonl[.gz]) to replay; exercises the live decoder")
 		full        = flag.Bool("full", false, "stress mode: skip the universe filter (whole-market load)")
 		date        = flag.String("date", "", "session date YYYY-MM-DD (required with -from/-to)")
 		fromS       = flag.String("from", "", "window start, ET HH:MM:SS inclusive")
@@ -38,8 +39,12 @@ func main() {
 		nbboSyms    = flag.String("nbbo", "SPY,NVDA,AAPL", "comma-separated symbols to print final NBBO for (spot checks)")
 	)
 	flag.Parse()
-	if *tradesPath == "" && *quotesPath == "" {
-		fmt.Fprintln(os.Stderr, "nothing to do: pass -trades and/or -quotes")
+	if *tradesPath == "" && *quotesPath == "" && *capturePath == "" {
+		fmt.Fprintln(os.Stderr, "nothing to do: pass -trades, -quotes, and/or -capture")
+		os.Exit(2)
+	}
+	if *capturePath != "" && (*tradesPath != "" || *quotesPath != "" || *fromS != "" || *toS != "" || *full || *date != "") {
+		fmt.Fprintln(os.Stderr, "-capture replays alone (no -trades/-quotes/-from/-to/-full/-date)")
 		os.Exit(2)
 	}
 
@@ -65,6 +70,31 @@ func main() {
 
 	done := make(chan struct{})
 	go func() { p.Run(); close(done) }()
+
+	// Capture replay (mini-spec 1.2 done-when #2): one sequential stream
+	// through the live decoder, then the same report path as flat files.
+	if *capturePath != "" {
+		start := time.Now()
+		ls, err := feed.StreamCapture(*capturePath, p)
+		p.Close()
+		<-done
+		fmt.Printf("capture: frames=%d trades=%d quotes=%d status=%d unknown=%d decode-errs=%d elapsed=%s\n",
+			ls.Frames, ls.Trades, ls.Quotes, ls.Status, ls.Unknown, ls.DecodeErrs,
+			time.Since(start).Round(time.Millisecond))
+		// The absolute lost-message check must hold on the acceptance path
+		// too: replay-twice determinism cannot catch a DETERMINISTIC loss —
+		// the same messages vanish both times (review #5).
+		if submitted := ls.Trades + ls.Quotes; p.Processed.Load() != submitted {
+			fmt.Printf("!! processed=%d != submitted=%d — pipeline lost messages\n", p.Processed.Load(), submitted)
+			os.Exit(1)
+		}
+		reportState(table, splitCSV(*nbboSyms))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "capture replay failed (stats above are partial): %v\n", err)
+			os.Exit(3)
+		}
+		return
+	}
 
 	// Trades and quotes stream concurrently — cross-symbol order in the
 	// ticker-sorted flat files is meaningless anyway (see feed package doc);
@@ -144,8 +174,41 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Universe totals + sequence regressions (mini-spec done-when #1; the
-	// regression counters are the 1.5 seed).
+	// Stress-mode extras: without this line a -full run hides most of its
+	// load from the report (review finding #8).
+	if *full {
+		var xT, xQ, xRegT, xRegQ int64
+		extras := table.Extras()
+		for _, s := range extras {
+			xT += s.Trades.Load()
+			xQ += s.Quotes.Load()
+			xRegT += s.SeqRegressTrades.Load()
+			xRegQ += s.SeqRegressQuotes.Load()
+		}
+		fmt.Printf("extra (non-universe) symbols: %d  trades=%d quotes=%d  seq-regressions: trades=%d quotes=%d\n",
+			len(extras), xT, xQ, xRegT, xRegQ)
+	}
+
+	if opt.FromNs != 0 {
+		// Quotes are state-building: a -from window truncates each symbol's
+		// quote history, so the "final book" is an artifact, not an "as of"
+		// (review finding #4). Suppress rather than print a wrong book.
+		reportState(table, nil)
+		fmt.Printf("nbbo: suppressed (-from truncates quote history; books would not be \"as of\" any instant)\n")
+	} else {
+		reportState(table, splitCSV(*nbboSyms))
+	}
+
+	if inputErr {
+		os.Exit(3) // bad input file — distinct from exit 1 (lost messages) and 2 (flag misuse)
+	}
+}
+
+// reportState prints universe totals, the busiest symbols, and (when
+// requested) final NBBO for the spot-check symbols. Shared by the flat-file
+// and capture-replay paths so both report identically — done-when #2 of
+// mini-spec 1.2 compares exactly these lines across runs.
+func reportState(table *ingest.Table, nbboSyms []string) {
 	var uTrades, uQuotes, regT, regQ int64
 	type symCount struct {
 		sym string
@@ -165,50 +228,27 @@ func main() {
 	fmt.Printf("universe totals: trades=%d quotes=%d  seq-regressions: trades=%d quotes=%d  active-symbols=%d/%d\n",
 		uTrades, uQuotes, regT, regQ, len(top), table.Len())
 
-	sort.Slice(top, func(i, j int) bool { return top[i].n > top[j].n })
+	sort.Slice(top, func(i, j int) bool {
+		if top[i].n != top[j].n {
+			return top[i].n > top[j].n
+		}
+		return top[i].sym < top[j].sym // tie-break for deterministic output
+	})
 	fmt.Printf("top symbols by messages:")
 	for i := 0; i < len(top) && i < 10; i++ {
 		fmt.Printf("  %s=%d", top[i].sym, top[i].n)
 	}
 	fmt.Println()
 
-	// Stress-mode extras: without this line a -full run hides most of its
-	// load from the report (review finding #8).
-	if *full {
-		var xT, xQ, xRegT, xRegQ int64
-		extras := table.Extras()
-		for _, s := range extras {
-			xT += s.Trades.Load()
-			xQ += s.Quotes.Load()
-			xRegT += s.SeqRegressTrades.Load()
-			xRegQ += s.SeqRegressQuotes.Load()
+	for _, sym := range nbboSyms {
+		st := table.Lookup(sym)
+		if st == nil {
+			fmt.Printf("nbbo %s: not in universe\n", sym)
+			continue
 		}
-		fmt.Printf("extra (non-universe) symbols: %d  trades=%d quotes=%d  seq-regressions: trades=%d quotes=%d\n",
-			len(extras), xT, xQ, xRegT, xRegQ)
-	}
-
-	// Final NBBO for the spot-check symbols (done-when #3: run with -to T and
-	// compare against hand-computed book state as of T).
-	if opt.FromNs != 0 {
-		// Quotes are state-building: a -from window truncates each symbol's
-		// quote history, so the "final book" is an artifact, not an "as of"
-		// (review finding #4). Suppress rather than print a wrong book.
-		fmt.Printf("nbbo: suppressed (-from truncates quote history; books would not be \"as of\" any instant)\n")
-	} else {
-		for _, sym := range splitCSV(*nbboSyms) {
-			st := table.Lookup(sym)
-			if st == nil {
-				fmt.Printf("nbbo %s: not in universe\n", sym)
-				continue
-			}
-			n := st.NBBO()
-			fmt.Printf("nbbo %s: bid %.4f x %d (exch %d)  ask %.4f x %d (exch %d)  ts=%d seq=%d\n",
-				sym, n.BidPrice, n.BidSize, n.BidExch, n.AskPrice, n.AskSize, n.AskExch, n.Ts, n.Seq)
-		}
-	}
-
-	if inputErr {
-		os.Exit(3) // bad input file — distinct from exit 1 (lost messages) and 2 (flag misuse)
+		n := st.NBBO()
+		fmt.Printf("nbbo %s: bid %.4f x %d (exch %d)  ask %.4f x %d (exch %d)  ts=%d seq=%d\n",
+			sym, n.BidPrice, n.BidSize, n.BidExch, n.AskPrice, n.AskSize, n.AskExch, n.Ts, n.Seq)
 	}
 }
 

@@ -79,6 +79,35 @@ func TestPrecedence(t *testing.T) {
 	}
 }
 
+// Proves the combining rule over the whole lattice: every ordered pair of sale
+// conditions classifies as the higher-precedence (lower-valued) class of the two,
+// independent of array order. Oracle is tableCases, not saleConditions, so this
+// stays anchored to the policy-doc transcription.
+func TestPrecedenceExhaustive(t *testing.T) {
+	for _, a := range tableCases {
+		for _, b := range tableCases {
+			want := a.want
+			if b.want < want {
+				want = b.want
+			}
+			got, unknown := Classify([]int32{a.id, b.id})
+			if got != want || unknown != nil {
+				t.Errorf("[%d %d]: got %v (unknown %v), want %v", a.id, b.id, got, unknown, want)
+			}
+		}
+	}
+}
+
+// The classifier consults neutralConditions before saleConditions, so an ID
+// present in both would silently shadow its sale class. The sets must be disjoint.
+func TestSaleNeutralDisjoint(t *testing.T) {
+	for id := range neutralConditions {
+		if class, ok := saleConditions[id]; ok {
+			t.Errorf("id %d is in both neutralConditions and saleConditions (%v); the neutral skip would dead-letter the sale row", id, class)
+		}
+	}
+}
+
 func TestUnknownQuarantine(t *testing.T) {
 	// Unknown alone.
 	got, unknown := Classify([]int32{40})

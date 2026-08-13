@@ -1,0 +1,240 @@
+// Command ingest wires a feeder to the ingest core and reports what flowed.
+// For story 1.1 it is the acceptance instrument: it streams flat files
+// through the pipeline and prints the counts, throughput, and NBBO state the
+// mini-spec's done-when criteria check
+// (docs/mini-specs/1.1-ingest-skeleton.md).
+//
+// Examples:
+//
+//	go run ./cmd/ingest -trades data/trades/2026-08-11.csv.gz -quotes data/quotes/2026-08-11.csv.gz
+//	go run ./cmd/ingest -quotes data/quotes/2026-08-11.csv.gz -date 2026-08-11 -from 09:29:55 -to 09:35:00
+//	go run ./cmd/ingest -trades data/trades/2026-08-11.csv.gz -full   # whole-market stress mode
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"buddy-flow/internal/feed"
+	"buddy-flow/internal/ingest"
+	"buddy-flow/internal/universe"
+)
+
+func main() {
+	var (
+		basketsPath = flag.String("baskets", "docs/foundations/morning-tape-baskets-v2.json", "trader-owned basket config (universe source of truth)")
+		tradesPath  = flag.String("trades", "", "trades flat file (.csv or .csv.gz); empty = skip")
+		quotesPath  = flag.String("quotes", "", "quotes flat file (.csv or .csv.gz); empty = skip")
+		full        = flag.Bool("full", false, "stress mode: skip the universe filter (whole-market load)")
+		date        = flag.String("date", "", "session date YYYY-MM-DD (required with -from/-to)")
+		fromS       = flag.String("from", "", "window start, ET HH:MM:SS inclusive")
+		toS         = flag.String("to", "", "window end, ET HH:MM:SS exclusive")
+		queueSize   = flag.Int("queue", 0, "pipeline queue size (0 = default)")
+		nbboSyms    = flag.String("nbbo", "SPY,NVDA,AAPL", "comma-separated symbols to print final NBBO for (spot checks)")
+	)
+	flag.Parse()
+	if *tradesPath == "" && *quotesPath == "" {
+		fmt.Fprintln(os.Stderr, "nothing to do: pass -trades and/or -quotes")
+		os.Exit(2)
+	}
+
+	opt := feed.Options{Full: *full}
+	if *fromS != "" || *toS != "" {
+		if *date == "" {
+			fmt.Fprintln(os.Stderr, "-from/-to require -date YYYY-MM-DD")
+			os.Exit(2)
+		}
+		opt.FromNs = mustET(*date, *fromS)
+		opt.ToNs = mustET(*date, *toS)
+	}
+
+	syms, err := universe.Load(*basketsPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	table := ingest.NewTable(syms)
+	p := ingest.NewPipeline(table, *queueSize)
+
+	fmt.Printf("universe: %d symbols  full=%v  window=[%s, %s)\n", table.Len(), *full, *fromS, *toS)
+
+	done := make(chan struct{})
+	go func() { p.Run(); close(done) }()
+
+	// Trades and quotes stream concurrently — cross-symbol order in the
+	// ticker-sorted flat files is meaningless anyway (see feed package doc);
+	// final state and counts are deterministic regardless of interleaving.
+	// A feeder error (truncated gzip, missing column) is carried back here so
+	// the run still drains, reports partial stats, and exits distinctly —
+	// never os.Exit mid-goroutine, which would discard the other feeder's
+	// work and alias the "lost messages" exit code.
+	type result struct {
+		stats feed.Stats
+		err   error
+	}
+	start := time.Now()
+	var wg sync.WaitGroup
+	results := map[string]result{}
+	var resMu sync.Mutex
+	for _, f := range []struct {
+		path string
+		kind ingest.Kind
+		name string
+	}{
+		{*tradesPath, ingest.KindTrade, "trades"},
+		{*quotesPath, ingest.KindQuote, "quotes"},
+	} {
+		if f.path == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(path string, kind ingest.Kind, name string) {
+			defer wg.Done()
+			st, err := feed.StreamFile(path, kind, p, opt)
+			resMu.Lock()
+			results[name] = result{st, err}
+			resMu.Unlock()
+		}(f.path, f.kind, f.name)
+	}
+	wg.Wait()
+	p.Close()
+	<-done
+	elapsed := time.Since(start)
+
+	inputErr := false
+	for name, r := range results {
+		if r.err != nil {
+			inputErr = true
+			fmt.Fprintf(os.Stderr, "%s feeder failed (stats below are partial): %v\n", name, r.err)
+		}
+	}
+
+	// --- report ---
+	windowed := opt.FromNs != 0 || opt.ToNs != 0
+	var totalSubmitted int64
+	for _, name := range []string{"trades", "quotes"} {
+		r, ok := results[name]
+		if !ok {
+			continue
+		}
+		st := r.stats
+		fmt.Printf("%s: rows=%d submitted=%d filtered=%d windowed=%d malformed=%d\n",
+			name, st.Rows, st.Submitted, st.Filtered, st.Windowed, st.Malformed)
+		totalSubmitted += st.Submitted
+	}
+	fmt.Printf("elapsed=%s  processed=%d  max-queue-depth=%d  cond-overflow=%d\n",
+		elapsed.Round(time.Millisecond), p.Processed.Load(),
+		p.MaxQueueDepth.Load(), p.CondOverflow.Load())
+	if windowed {
+		// A windowed run still scans the whole file; submitted/elapsed would
+		// measure the scan, not the pipeline. Refuse to print a number that
+		// looks like a floor measurement (mini-spec 1.1, review finding #2).
+		fmt.Printf("throughput: n/a on windowed runs (whole file is scanned; rate would not measure the pipeline)\n")
+	} else {
+		fmt.Printf("throughput=%.0f msg/sec (end-to-end lower bound: includes gzip+CSV scan of all rows)\n",
+			float64(totalSubmitted)/elapsed.Seconds())
+	}
+	if p.Processed.Load() != totalSubmitted {
+		fmt.Printf("!! processed != submitted — pipeline lost messages\n")
+		os.Exit(1)
+	}
+
+	// Universe totals + sequence regressions (mini-spec done-when #1; the
+	// regression counters are the 1.5 seed).
+	var uTrades, uQuotes, regT, regQ int64
+	type symCount struct {
+		sym string
+		n   int64
+	}
+	var top []symCount
+	for _, s := range table.All() {
+		t, q := s.Trades.Load(), s.Quotes.Load()
+		uTrades += t
+		uQuotes += q
+		regT += s.SeqRegressTrades.Load()
+		regQ += s.SeqRegressQuotes.Load()
+		if t+q > 0 {
+			top = append(top, symCount{s.Symbol, t + q})
+		}
+	}
+	fmt.Printf("universe totals: trades=%d quotes=%d  seq-regressions: trades=%d quotes=%d  active-symbols=%d/%d\n",
+		uTrades, uQuotes, regT, regQ, len(top), table.Len())
+
+	sort.Slice(top, func(i, j int) bool { return top[i].n > top[j].n })
+	fmt.Printf("top symbols by messages:")
+	for i := 0; i < len(top) && i < 10; i++ {
+		fmt.Printf("  %s=%d", top[i].sym, top[i].n)
+	}
+	fmt.Println()
+
+	// Stress-mode extras: without this line a -full run hides most of its
+	// load from the report (review finding #8).
+	if *full {
+		var xT, xQ, xRegT, xRegQ int64
+		extras := table.Extras()
+		for _, s := range extras {
+			xT += s.Trades.Load()
+			xQ += s.Quotes.Load()
+			xRegT += s.SeqRegressTrades.Load()
+			xRegQ += s.SeqRegressQuotes.Load()
+		}
+		fmt.Printf("extra (non-universe) symbols: %d  trades=%d quotes=%d  seq-regressions: trades=%d quotes=%d\n",
+			len(extras), xT, xQ, xRegT, xRegQ)
+	}
+
+	// Final NBBO for the spot-check symbols (done-when #3: run with -to T and
+	// compare against hand-computed book state as of T).
+	if opt.FromNs != 0 {
+		// Quotes are state-building: a -from window truncates each symbol's
+		// quote history, so the "final book" is an artifact, not an "as of"
+		// (review finding #4). Suppress rather than print a wrong book.
+		fmt.Printf("nbbo: suppressed (-from truncates quote history; books would not be \"as of\" any instant)\n")
+	} else {
+		for _, sym := range splitCSV(*nbboSyms) {
+			st := table.Lookup(sym)
+			if st == nil {
+				fmt.Printf("nbbo %s: not in universe\n", sym)
+				continue
+			}
+			n := st.NBBO()
+			fmt.Printf("nbbo %s: bid %.4f x %d (exch %d)  ask %.4f x %d (exch %d)  ts=%d seq=%d\n",
+				sym, n.BidPrice, n.BidSize, n.BidExch, n.AskPrice, n.AskSize, n.AskExch, n.Ts, n.Seq)
+		}
+	}
+
+	if inputErr {
+		os.Exit(3) // bad input file — distinct from exit 1 (lost messages) and 2 (flag misuse)
+	}
+}
+
+// mustET converts "YYYY-MM-DD" + "HH:MM:SS" in America/New_York to epoch ns.
+func mustET(date, hms string) int64 {
+	if hms == "" {
+		return 0
+	}
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		panic(err)
+	}
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", date+" "+hms, loc)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bad time %q %q: %v\n", date, hms, err)
+		os.Exit(2)
+	}
+	return t.UnixNano()
+}
+
+func splitCSV(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}

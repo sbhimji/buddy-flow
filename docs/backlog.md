@@ -88,3 +88,63 @@ or during Phase 1 flat-file analysis at the latest):**
 **Decision rule once verified:**
 - Details + summary both print → `G` = `DUPLICATE` (summary print carries the volume).
 - `G` prints alone → `G` = `CROSS_OPEN` / `CROSS_REOPEN` per the auction it belongs to.
+
+## Universe loader hardening + baskets schema field (schema half needs trader)
+
+**Logged:** 2026-08-13 (1.1 post-close code review). **Lands in:** `internal/universe`
+plus a D1-owner config change.
+
+**Deferral being recorded:** Phase 0 story 0.1 carried "effective-date/versioning
+mechanism; config loads, validates (no orphan tickers, no empty baskets), membership
+change produces a new version without touching history" to the first loader module.
+`internal/universe.Load` (1.1) shipped without any of it — defensible for a
+read-and-count skeleton, but the deferral was recorded nowhere until now. Effective-date
+stamping is a CLAUDE.md invariant (historical replays must use historical membership);
+it becomes load-bearing no later than Phase 2 baselines. Validation (empty baskets,
+duplicate members, unknown-symbol checks) should land with it.
+
+**Schema proposal for the trader:** the engine currently excludes non-equity symbols by
+matching the trader-owned group *name* `bond_gate_futures` — a string the trader may
+rename or split at will, silently changing the universe (review finding; ⚠ comment at
+the match site). Also: the exclusion only scans benchmark groups, so a non-equity
+symbol placed in a basket's `members` leaks through unconditionally. The fix is a data
+field on groups (e.g. `equity: false`) filtered on as data, not identity — but the JSON
+is trader-owned (D1), so this is a schema *proposal* to take to the trader, not an
+engineering edit. Until accepted, the group-name match stands, documented as fragile.
+
+## Pre-market / post-market (extended hours) tracking (new display scope — trader input needed)
+
+**Logged:** 2026-08-13. **Lands in:** its own post-v1 story (Phase 6 earliest); touches
+ingest hours, bucket store, and a session-scoped *read* of the 0.3 classification —
+never the 0.3 table itself.
+
+**What:** v1 is a regular-session instrument by design — Form T (12) and Extended Hours
+Sold OOS (13) classify `NON_FLOW`, historical bars are filtered to 09:30–16:00, and
+baselines exist only for regular-session buckets. But extended-hours activity is real
+context for the open: pre-market concentration on a guide-night gap (the SNDK reference
+day) previews where dollar volume will fight at 09:30, and post-market earnings
+reactions seed the next morning's watch. The ask: a separate extended-hours view
+(pre 04:00–09:30, post 16:00–20:00 ET) showing where $vol is concentrating, kept
+strictly apart from the regular-session instrument.
+
+**Why deferred:** the primary user moment is 09:30–10:30, and extended hours are
+structurally weaker on every axis the instrument depends on — volumes are thin and
+lumpy so a 20-day matched-bucket baseline mostly hits the σ floor; NBBO is sparse so
+Lee-Ready is largely unavailable (F2 worsens); off-exchange share is higher (F3
+compounds). Building it before the regular-session core is proven inverts the build
+order, and whether it earns screen space at all is the trader's call.
+
+**Constraints when picked up:**
+- `NON_FLOW` for 12/13 stands for every regular-session metric. Extended tracking reads
+  the same stored prints through a session-scoped lens; editing the 0.3 table would
+  break replay reproducibility.
+- Extended-hours buckets are a separate ledger (like crosses): nothing leaks into
+  regular-session baselines, CUSUM, or since-open anchors — no seam at 09:30 or 16:00.
+- Ingest/capture window widens (04:00–20:00 ET); capture stays unconditional; disk
+  budget and the nightly profile-builder window get re-checked.
+- Baseline design is the open question: 20-day matched buckets are likely too thin
+  pre-market — either a longer lookback, coarser buckets, or raw $vol with no z at
+  first. The aggs endpoint already returns extended hours (currently filtered out),
+  so historical seeding needs no new procurement.
+- Trader decisions: what renders (pre-open strip? tile brightness before 09:30?),
+  and whether post-market matters live or only as next-morning context.

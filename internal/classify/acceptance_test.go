@@ -25,7 +25,7 @@ import (
 // by prints and dollars.
 // tradesCSV is the session file under test. Hardcoded for now; rename the
 // downloaded file to trades.csv (or edit this constant to match its name).
-const tradesCSV = "../../data/trades/2026-08-11.csv.gz"
+const tradesCSV = "../../data/flat-files/trades/2026-08-11.csv.gz"
 
 func TestAcceptanceFullSession(t *testing.T) {
 	path := tradesCSV

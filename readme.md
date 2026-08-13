@@ -11,9 +11,9 @@ Requirements: Go 1.21+. Live capture additionally needs `MASSIVE_API_KEY` in
 ## Data layout (all gitignored)
 
 ```
-data/capture/<date>/stream.jsonl   captured live sessions (+ manifest.json)
-data/trades/<date>.csv.gz          vendor flat files (whole market, by ticker)
-data/quotes/<date>.csv.gz
+data/capture/<date>/stream.jsonl        captured live sessions (+ manifest.json)
+data/flat-files/trades/<date>.csv.gz    vendor flat files (whole market, by ticker)
+data/flat-files/quotes/<date>.csv.gz
 ```
 
 ## Replay a captured session
@@ -47,13 +47,13 @@ for count reconciliation, time-windowed studies, and stress testing.
 
 ```
 # full session, universe-filtered (the 1.1 acceptance run)
-go run ./cmd/ingest -trades data/trades/2026-08-11.csv.gz -quotes data/quotes/2026-08-11.csv.gz
+go run ./cmd/ingest -trades data/flat-files/trades/2026-08-11.csv.gz -quotes data/flat-files/quotes/2026-08-11.csv.gz
 
 # time window (ET), e.g. book state as of 09:35:00 via -to
-go run ./cmd/ingest -quotes data/quotes/2026-08-11.csv.gz -date 2026-08-11 -to 09:35:00
+go run ./cmd/ingest -quotes data/flat-files/quotes/2026-08-11.csv.gz -date 2026-08-11 -to 09:35:00
 
 # whole-market stress mode (~5× universe load; skips the universe filter)
-go run ./cmd/ingest -trades data/trades/2026-08-11.csv.gz -full
+go run ./cmd/ingest -trades data/flat-files/trades/2026-08-11.csv.gz -full
 ```
 
 Note: `-from` truncates quote history, so final-NBBO output is suppressed on

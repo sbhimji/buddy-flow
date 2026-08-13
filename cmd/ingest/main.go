@@ -6,9 +6,9 @@
 //
 // Examples:
 //
-//	go run ./cmd/ingest -trades data/trades/2026-08-11.csv.gz -quotes data/quotes/2026-08-11.csv.gz
-//	go run ./cmd/ingest -quotes data/quotes/2026-08-11.csv.gz -date 2026-08-11 -from 09:29:55 -to 09:35:00
-//	go run ./cmd/ingest -trades data/trades/2026-08-11.csv.gz -full   # whole-market stress mode
+//	go run ./cmd/ingest -trades data/flat-files/trades/2026-08-11.csv.gz -quotes data/flat-files/quotes/2026-08-11.csv.gz
+//	go run ./cmd/ingest -quotes data/flat-files/quotes/2026-08-11.csv.gz -date 2026-08-11 -from 09:29:55 -to 09:35:00
+//	go run ./cmd/ingest -trades data/flat-files/trades/2026-08-11.csv.gz -full   # whole-market stress mode
 package main
 
 import (

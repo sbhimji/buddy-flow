@@ -34,8 +34,8 @@ import pandas as pd
 REPO = Path(__file__).resolve().parents[2]
 BASKETS_JSON = REPO / "docs/foundations/morning-tape-baskets-v2.json"
 DATE = "2026-08-11"
-TRADES_GZ = REPO / f"data/trades/{DATE}.csv.gz"
-QUOTES_GZ = REPO / f"data/quotes/{DATE}.csv.gz"
+TRADES_GZ = REPO / f"data/flat-files/trades/{DATE}.csv.gz"
+QUOTES_GZ = REPO / f"data/flat-files/quotes/{DATE}.csv.gz"
 OUT_DIR = Path(__file__).resolve().parent / "output"
 
 ET = ZoneInfo("America/New_York")

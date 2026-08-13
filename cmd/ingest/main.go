@@ -31,6 +31,7 @@ func main() {
 		tradesPath  = flag.String("trades", "", "trades flat file (.csv or .csv.gz); empty = skip")
 		quotesPath  = flag.String("quotes", "", "quotes flat file (.csv or .csv.gz); empty = skip")
 		capturePath = flag.String("capture", "", "captured live session (stream.jsonl[.gz]) to replay; exercises the live decoder")
+		speed       = flag.Float64("speed", 0, "capture replay pacing: 0=instant, 1=real-time (recorded spacing), N=accelerated ×N")
 		full        = flag.Bool("full", false, "stress mode: skip the universe filter (whole-market load)")
 		date        = flag.String("date", "", "session date YYYY-MM-DD (required with -from/-to)")
 		fromS       = flag.String("from", "", "window start, ET HH:MM:SS inclusive")
@@ -41,6 +42,10 @@ func main() {
 	flag.Parse()
 	if *tradesPath == "" && *quotesPath == "" && *capturePath == "" {
 		fmt.Fprintln(os.Stderr, "nothing to do: pass -trades, -quotes, and/or -capture")
+		os.Exit(2)
+	}
+	if *speed != 0 && *capturePath == "" {
+		fmt.Fprintln(os.Stderr, "-speed applies only to -capture replay")
 		os.Exit(2)
 	}
 	if *capturePath != "" && (*tradesPath != "" || *quotesPath != "" || *fromS != "" || *toS != "" || *full || *date != "") {
@@ -75,7 +80,10 @@ func main() {
 	// through the live decoder, then the same report path as flat files.
 	if *capturePath != "" {
 		start := time.Now()
-		ls, err := feed.StreamCapture(*capturePath, p)
+		ls, err := feed.StreamCapture(*capturePath, p, feed.ReplayOptions{
+			Speed: *speed,
+			Log:   func(f string, a ...any) { fmt.Printf("replay: "+f+"\n", a...) },
+		})
 		p.Close()
 		<-done
 		fmt.Printf("capture: frames=%d trades=%d quotes=%d status=%d unknown=%d decode-errs=%d elapsed=%s\n",

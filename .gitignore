@@ -2,3 +2,5 @@
 data/
 docs/temp/
 .DS_Store
+
+discovery-scripts/flat-file-analysis/output/

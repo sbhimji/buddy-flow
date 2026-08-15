@@ -64,7 +64,6 @@ func main() {
 	p := ingest.NewPipeline(table, 0)
 	store := bucket.NewStore()
 	p.SetObserver(store) // before Run starts (pipeline contract)
-	bucketPath := bucket.Path(*bucketsDir, date)
 	pipeDone := make(chan struct{})
 	go func() { p.Run(); close(pipeDone) }()
 
@@ -165,12 +164,28 @@ func main() {
 	if runErr != nil {
 		exitCode = 1 // the manifest records the fatal stop; the exit code makes cron/scripts see it too
 		fmt.Fprintf(os.Stderr, "buckets not written (fatal stop = partial session): regenerate with cmd/replay -capture %s -buckets %s\n",
-			capture.StreamPath(*outDir, date), bucketPath)
-	} else if rows, err := store.WriteCSV(bucketPath); err != nil {
-		exitCode = 4
-		fmt.Fprintf(os.Stderr, "final bucket write FAILED (capture intact; regenerate by replaying it): %v\n", err)
+			capture.StreamPath(*outDir, date), bucket.PartialPath(*bucketsDir, date))
+	} else if minSec, maxSec, ok := store.Bounds(); !ok {
+		fmt.Printf("buckets: store empty — nothing to write\n")
 	} else {
-		fmt.Printf("buckets: %d (second,symbol) rows -> %s\n", rows, bucketPath)
+		// D3: the filename states coverage, decided from the data. A late
+		// start, an early stop, or a silently dead feed gets .partial.csv —
+		// truthful and invisible to baseline discovery — never an error:
+		// the live process must not fail its final write over naming.
+		dataDate, spans, serr := bucket.SpansRegularSession(minSec, maxSec)
+		trades, quotes := store.Totals()
+		writePath := bucket.Path(*bucketsDir, dataDate)
+		if serr != nil || !spans || trades == 0 || quotes == 0 {
+			writePath = bucket.PartialPath(*bucketsDir, dataDate)
+			fmt.Printf("buckets: store does not span the regular session with both feeds (spans=%v trades=%d quotes=%d err=%v) — writing partial name\n",
+				spans, trades, quotes, serr)
+		}
+		if rows, err := store.WriteCSV(writePath); err != nil {
+			exitCode = 4
+			fmt.Fprintf(os.Stderr, "final bucket write FAILED (capture intact; regenerate by replaying it): %v\n", err)
+		} else {
+			fmt.Printf("buckets: %d (second,symbol) rows -> %s\n", rows, writePath)
+		}
 	}
 	if n, ids := store.Unknown(); n > 0 {
 		fmt.Printf("!! tripwire: %d prints carried condition IDs missing from the 0.3 table: %v\n", n, ids)

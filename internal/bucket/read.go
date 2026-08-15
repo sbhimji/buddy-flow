@@ -151,6 +151,13 @@ func (s *Session) DeriveMinute(symbol string, minuteSec int64) (Bucket, error) {
 	return out, nil
 }
 
+// Bounds returns the min and max second present in the session, ok=false
+// for an empty file. Lets consumers verify a file's data actually lies on
+// the session date its name claims (profile.Build).
+func (s *Session) Bounds() (minSec, maxSec int64, ok bool) {
+	return bounds(s.rows)
+}
+
 // Symbols returns the symbols present in the file (unordered).
 func (s *Session) Symbols() []string {
 	out := make([]string, 0, len(s.rows))

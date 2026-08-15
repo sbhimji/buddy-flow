@@ -181,6 +181,28 @@ func TestReadGzip(t *testing.T) {
 	}
 }
 
+func TestSpansRegularSessionAndTotals(t *testing.T) {
+	table := ingest.NewTable([]string{"NVDA"})
+	nvda := table.Lookup("NVDA")
+	open := int64(1786714200)  // 2026-08-14 09:30:00 ET
+	close := int64(1786737600) // 16:00:00 ET
+	s := NewStore()
+	s.ObserveTrade(trade(nvda, open*1e9, 50, 10))
+	s.ObserveQuote(&ingest.Quote{State: nvda, SipTs: (close - 60) * 1e9})
+	if date, spans, err := SpansRegularSession(open, close-60); err != nil || spans || date != "2026-08-14" {
+		t.Errorf("stops before close: date=%s spans=%v err=%v, want no span", date, spans, err)
+	}
+	if _, spans, err := SpansRegularSession(open, close); err != nil || !spans {
+		t.Errorf("covers open..close: spans=%v err=%v, want span", spans, err)
+	}
+	if _, spans, _ := SpansRegularSession(open+60, close+3600); spans {
+		t.Error("late start counted as spanning")
+	}
+	if tr, q := s.Totals(); tr != 1 || q != 1 {
+		t.Errorf("Totals = %d,%d", tr, q)
+	}
+}
+
 func TestWriterDeterminism(t *testing.T) {
 	s, _, _ := twoSymbolStore(t)
 	p1 := writeStore(t, s, "a.csv")

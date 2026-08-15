@@ -28,6 +28,7 @@ import (
 
 	"buddy-flow/internal/classify"
 	"buddy-flow/internal/ingest"
+	"buddy-flow/internal/session"
 )
 
 // NumClasses is the number of 0.3 classes (classify.Class values are dense
@@ -261,9 +262,85 @@ func (s *Store) WriteCSV(path string) (int, error) {
 	return len(rows), os.Rename(tmp, path)
 }
 
+// Bucket-file naming (mini-spec 2.1 D3): the filename declares session
+// coverage. Only full-session files (<date>.csv) and trades-only bootstrap
+// files may enter baselines; partial capture-derived files must say so.
+// These constants are the single spelling — cmd/replay validates against
+// them, cmd/profiles discovers by them.
+const (
+	TradesOnlySuffix = ".trades-only.csv" // trades-feed-only bootstrap file (quote counts honestly zero)
+	PartialSuffix    = ".partial.csv"     // capture-derived file that does not span the regular session
+)
+
 // Path returns the D4 session-file location: <base>/<date>.csv.
 func Path(baseDir, date string) string {
 	return filepath.Join(baseDir, date+".csv")
+}
+
+// PartialPath returns the D3 location for a store that does not span the
+// regular session: <base>/<date>.partial.csv — never discovered into
+// baselines.
+func PartialPath(baseDir, date string) string {
+	return filepath.Join(baseDir, date+PartialSuffix)
+}
+
+// bounds scans a two-level map for its min/max inner (epoch-second) keys —
+// shared by Store.Bounds and Session.Bounds, whose maps differ only in
+// key/value types.
+func bounds[K comparable, V any](outer map[K]map[int64]V) (minSec, maxSec int64, ok bool) {
+	for _, m := range outer {
+		for sec := range m {
+			if !ok || sec < minSec {
+				minSec = sec
+			}
+			if !ok || sec > maxSec {
+				maxSec = sec
+			}
+			ok = true
+		}
+	}
+	return minSec, maxSec, ok
+}
+
+// Bounds returns the min and max epoch-second keys present in the store,
+// ok=false when the store is empty. Used to decide whether a capture-derived
+// file spans the regular session (D3 coverage naming).
+func (s *Store) Bounds() (minSec, maxSec int64, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return bounds(s.buckets)
+}
+
+// Totals returns the store-wide trade and quote counts. A spanning store
+// with zero on either side means a feed was silently missing — not a full
+// session record, however wide its time span.
+func (s *Store) Totals() (trades, quotes int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.buckets {
+		for _, b := range m {
+			trades += b.Trades
+			quotes += b.Quotes
+		}
+	}
+	return trades, quotes
+}
+
+// SpansRegularSession reports whether [minSec, maxSec] covers the regular
+// session of the ET date containing minSec, and returns that date. Coverage
+// requires data at/before 09:30:00 and at/after 16:00:00 — a record missing
+// the open or the closing cross is not a full session.
+func SpansRegularSession(minSec, maxSec int64) (date string, spans bool, err error) {
+	date = session.Date(minSec * 1e9)
+	openSec, err := session.BucketStart(date, session.OpenMinute)
+	if err != nil {
+		return date, false, err
+	}
+	closeSec, err := session.BucketStart(date, session.CloseMinute)
+	if err != nil {
+		return date, false, err
+	}
+	return date, minSec <= openSec && maxSec >= closeSec, nil
 }
 
 var _ ingest.Observer = (*Store)(nil)

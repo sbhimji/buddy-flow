@@ -248,3 +248,35 @@ integrity + disk headroom; halt detection (LULD — may deserve its own story; t
 **Done-when (unchanged):** agreed metrics visible in the 3.0 dev view on a replayed
 session; nightly ledger entry contains the session's data-quality block; replaying the
 same capture twice produces identical monitoring numbers.
+
+## Websocket quote re-broadcast hypothesis (~30s cadence) — verify by data, confirm with vendor
+
+**Logged:** 2026-08-15 (1.2 criterion-4 reconciliation). **Lands in:** 1.5 (quote-count
+reconciliation + quote-staleness metrics); may also matter to 3.3's quote memory.
+
+Evidence: reconciling the 08-14 capture vs flat files over 12:00–16:00 ET, ~84 symbols
+each show almost exactly **480 more quotes in the capture** than in the SIP flat file —
+one per 30 seconds over the 4-hour window, concentrated on quiet symbols and sector
+ETFs (all XL*, defense names). Arithmetic (84 × 480 ≈ the full −40.5k delta) strongly
+suggests the vendor websocket periodically re-broadcasts the current NBBO as a
+keep-alive/refresh, and these synthetic records are not SIP quote events. Hypothesis,
+not confirmed.
+
+**Verify by data:** pick symbols with delta ≈ −480 (e.g. an XL* fund); align capture
+quotes against flat-file quotes for the same window; isolate capture-only records and
+check (a) inter-arrival spacing ≈ 30s, (b) whether payloads duplicate the prior NBBO
+exactly, and — decisive — (c) whether they carry the same SIP timestamp `t` and
+`sequence_number` as the original quote (same seq ⇒ trivial dedupe key exists; fresh
+seq ⇒ vendor synthesizes records, nastier). `discovery-scripts/reconcile-capture.py`
+already has the parsing needed.
+
+**Ask Massive directly:** whether the stocks websocket re-sends the standing NBBO on an
+interval, on what cadence, and whether a field distinguishes a refresh from a true SIP
+update.
+
+**Why it matters:** live quote counts run ~0.2% hot vs vendor truth (mechanically, not
+loss) — 1.5's reconciliation must expect this or it will cry wolf nightly; and if
+refreshes carry fresh timestamps, a naive quote-staleness metric would read a stale
+book as fresh. Also carried from the same reconciliation: a residual unexplained
+vendor-side surplus on a few active names (CORZ +57, CSCO +25, QQQ +16; ≤0.03% each,
+zero reconnects that day) — recheck once the re-broadcast question is settled.

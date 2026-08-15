@@ -1,8 +1,10 @@
-// Command capture runs the live websocket feeder with unconditional capture
-// (mini-spec 1.2). There is deliberately no flag to disable capture.
+// Command live runs the live market session: unconditional capture of every
+// raw frame (mini-spec 1.2 — deliberately no flag to disable it) plus the
+// full ingest pipeline (NBBO state, counters, the 1.4 bucket store). One
+// instance per session date — two appenders would corrupt the stream.
 //
-//	go run ./cmd/capture                      # capture until 20:00 ET today
-//	go run ./cmd/capture -until 16:30:00      # shorter session (smoke tests)
+//	go run ./cmd/live                      # session until 20:00 ET today
+//	go run ./cmd/live -until 16:30:00      # shorter session (smoke tests)
 //
 // The API key comes from MASSIVE_API_KEY (environment, falling back to .env
 // at the repo root). Ctrl-C closes cleanly and writes the manifest.
@@ -18,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"buddy-flow/internal/bucket"
 	"buddy-flow/internal/capture"
 	"buddy-flow/internal/feed"
 	"buddy-flow/internal/ingest"
@@ -28,6 +31,7 @@ func main() {
 	var (
 		basketsPath = flag.String("baskets", "docs/foundations/morning-tape-baskets-v2.json", "trader-owned basket config")
 		outDir      = flag.String("out", "data/capture", "capture base directory")
+		bucketsDir  = flag.String("buckets-dir", "data/buckets", "bucket store directory (1.4); session file is <dir>/<date>.csv (NB: cmd/replay's -buckets takes a file path)")
 		untilS      = flag.String("until", "20:00:00", "stop time, ET HH:MM:SS today")
 		url         = flag.String("url", "wss://socket.massive.com/stocks", "websocket endpoint")
 	)
@@ -58,6 +62,9 @@ func main() {
 	}
 	table := ingest.NewTable(syms)
 	p := ingest.NewPipeline(table, 0)
+	store := bucket.NewStore()
+	p.SetObserver(store) // before Run starts (pipeline contract)
+	bucketPath := bucket.Path(*bucketsDir, date)
 	pipeDone := make(chan struct{})
 	go func() { p.Run(); close(pipeDone) }()
 
@@ -140,14 +147,36 @@ func main() {
 	if err := w.Close(capture.Manifest{
 		Date: date, UniverseSize: len(syms),
 		Subscriptions: []string{"T.*+Q.* for universe (see universe_size)"},
-		Note:          fmt.Sprintf("trades=%d quotes=%d status=%d reconnects=%d decode-errs=%d unknown=%d stop=%s", uT, uQ, stats.Status, stats.Reconnects, stats.DecodeErrs, stats.Unknown, reason),
+		Note:          fmt.Sprintf("trades=%d quotes=%d status=%d reconnects=%d decode-errs=%d unknown=%d cond-overflow=%d stop=%s", uT, uQ, stats.Status, stats.Reconnects, stats.DecodeErrs, stats.Unknown, p.CondOverflow.Load(), reason),
 	}); err != nil {
 		fatal(err)
 	}
-	fmt.Printf("done: frames=%d trades=%d quotes=%d status=%d reconnects=%d decode-errs=%d unknown-sym=%d\n",
-		stats.Frames, uT, uQ, stats.Status, stats.Reconnects, stats.DecodeErrs, stats.Unknown)
+	fmt.Printf("done: frames=%d trades=%d quotes=%d status=%d reconnects=%d decode-errs=%d unknown-sym=%d cond-overflow=%d\n",
+		stats.Frames, uT, uQ, stats.Status, stats.Reconnects, stats.DecodeErrs, stats.Unknown, p.CondOverflow.Load())
+
+	// Final bucket write, post-drain so every queued message is in the store,
+	// and after the manifest: a bucket failure must never cost the capture
+	// record. On a fatal feeder stop the write is skipped — a partial-day file
+	// at the canonical path would masquerade as a full session (same refusal
+	// as cmd/replay); the capture is the record, so regenerate from replay.
+	// Nothing below exits early: every report line prints, then one exit code
+	// — 1 fatal feeder stop, 4 bucket write failed (derived data only).
+	exitCode := 0
 	if runErr != nil {
-		os.Exit(1) // the manifest records the fatal stop; the exit code makes cron/scripts see it too
+		exitCode = 1 // the manifest records the fatal stop; the exit code makes cron/scripts see it too
+		fmt.Fprintf(os.Stderr, "buckets not written (fatal stop = partial session): regenerate with cmd/replay -capture %s -buckets %s\n",
+			capture.StreamPath(*outDir, date), bucketPath)
+	} else if rows, err := store.WriteCSV(bucketPath); err != nil {
+		exitCode = 4
+		fmt.Fprintf(os.Stderr, "final bucket write FAILED (capture intact; regenerate by replaying it): %v\n", err)
+	} else {
+		fmt.Printf("buckets: %d (second,symbol) rows -> %s\n", rows, bucketPath)
+	}
+	if n, ids := store.Unknown(); n > 0 {
+		fmt.Printf("!! tripwire: %d prints carried condition IDs missing from the 0.3 table: %v\n", n, ids)
+	}
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 }
 

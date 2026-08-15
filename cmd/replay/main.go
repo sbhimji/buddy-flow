@@ -1,14 +1,15 @@
-// Command ingest wires a feeder to the ingest core and reports what flowed.
-// For story 1.1 it is the acceptance instrument: it streams flat files
-// through the pipeline and prints the counts, throughput, and NBBO state the
-// mini-spec's done-when criteria check
-// (docs/mini-specs/1.1-ingest-skeleton.md).
+// Command replay re-runs recorded market data — captured sessions or vendor
+// flat files — through the same ingest pipeline the live command uses, and
+// reports what flowed. It is the acceptance instrument for every story
+// (stories close on replayed data, never live) and the regeneration tool for
+// derived data such as bucket files.
 //
 // Examples:
 //
-//	go run ./cmd/ingest -trades data/flat-files/trades/2026-08-11.csv.gz -quotes data/flat-files/quotes/2026-08-11.csv.gz
-//	go run ./cmd/ingest -quotes data/flat-files/quotes/2026-08-11.csv.gz -date 2026-08-11 -from 09:29:55 -to 09:35:00
-//	go run ./cmd/ingest -trades data/flat-files/trades/2026-08-11.csv.gz -full   # whole-market stress mode
+//	go run ./cmd/replay -capture data/capture/2026-08-13/stream.jsonl -buckets data/buckets/2026-08-13.csv
+//	go run ./cmd/replay -trades data/flat-files/trades/2026-08-11.csv.gz -quotes data/flat-files/quotes/2026-08-11.csv.gz
+//	go run ./cmd/replay -quotes data/flat-files/quotes/2026-08-11.csv.gz -date 2026-08-11 -from 09:29:55 -to 09:35:00
+//	go run ./cmd/replay -trades data/flat-files/trades/2026-08-11.csv.gz -full   # whole-market stress mode
 package main
 
 import (
@@ -20,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"buddy-flow/internal/bucket"
 	"buddy-flow/internal/feed"
 	"buddy-flow/internal/ingest"
 	"buddy-flow/internal/universe"
@@ -38,6 +40,7 @@ func main() {
 		toS         = flag.String("to", "", "window end, ET HH:MM:SS exclusive")
 		queueSize   = flag.Int("queue", 0, "pipeline queue size (0 = default)")
 		nbboSyms    = flag.String("nbbo", "SPY,NVDA,AAPL", "comma-separated symbols to print final NBBO for (spot checks)")
+		bucketsPath = flag.String("buckets", "", "write the 1.4 bucket store CSV here after the run; empty = no buckets")
 	)
 	flag.Parse()
 	if *tradesPath == "" && *quotesPath == "" && *capturePath == "" {
@@ -51,6 +54,22 @@ func main() {
 	if *capturePath != "" && (*tradesPath != "" || *quotesPath != "" || *fromS != "" || *toS != "" || *full || *date != "") {
 		fmt.Fprintln(os.Stderr, "-capture replays alone (no -trades/-quotes/-from/-to/-full/-date)")
 		os.Exit(2)
+	}
+	// A bucket file is a whole-session record; refuse runs that can only
+	// produce a structurally partial store (windowed seconds, a feed missing,
+	// non-universe symbols mixed in). Loud at flag parse, not a surprise file.
+	if *bucketsPath != "" && *capturePath == "" {
+		switch {
+		case *tradesPath == "" || *quotesPath == "":
+			fmt.Fprintln(os.Stderr, "-buckets needs both -trades and -quotes (a one-feed bucket file would record a session that had no quotes/trades)")
+			os.Exit(2)
+		case *fromS != "" || *toS != "":
+			fmt.Fprintln(os.Stderr, "-buckets cannot be windowed (-from/-to): the file would masquerade as a full session")
+			os.Exit(2)
+		case *full:
+			fmt.Fprintln(os.Stderr, "-buckets with -full would mix non-universe symbols into a session bucket file")
+			os.Exit(2)
+		}
 	}
 
 	opt := feed.Options{Full: *full}
@@ -70,6 +89,12 @@ func main() {
 	}
 	table := ingest.NewTable(syms)
 	p := ingest.NewPipeline(table, *queueSize)
+
+	var store *bucket.Store
+	if *bucketsPath != "" {
+		store = bucket.NewStore()
+		p.SetObserver(store) // before Run starts (pipeline contract)
+	}
 
 	fmt.Printf("universe: %d symbols  full=%v  window=[%s, %s)\n", table.Len(), *full, *fromS, *toS)
 
@@ -99,8 +124,9 @@ func main() {
 		reportState(table, splitCSV(*nbboSyms))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "capture replay failed (stats above are partial): %v\n", err)
-			os.Exit(3)
+			os.Exit(3) // no bucket write: a partial file at the target path would masquerade as a session
 		}
+		writeBuckets(store, *bucketsPath)
 		return
 	}
 
@@ -209,6 +235,25 @@ func main() {
 
 	if inputErr {
 		os.Exit(3) // bad input file — distinct from exit 1 (lost messages) and 2 (flag misuse)
+	}
+	writeBuckets(store, *bucketsPath)
+}
+
+// writeBuckets persists the 1.4 store and reports the unknown-condition
+// tripwire. No-op when -buckets was not given. Only called on clean runs —
+// a bucket file from a partial run would masquerade as a full session.
+func writeBuckets(store *bucket.Store, path string) {
+	if store == nil {
+		return
+	}
+	rows, err := store.WriteCSV(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bucket write failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("buckets: %d (second,symbol) rows -> %s\n", rows, path)
+	if n, ids := store.Unknown(); n > 0 {
+		fmt.Printf("!! tripwire: %d prints carried condition IDs missing from the 0.3 table: %v\n", n, ids)
 	}
 }
 

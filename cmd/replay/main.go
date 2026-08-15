@@ -24,6 +24,7 @@ import (
 	"buddy-flow/internal/bucket"
 	"buddy-flow/internal/feed"
 	"buddy-flow/internal/ingest"
+	"buddy-flow/internal/session"
 	"buddy-flow/internal/universe"
 )
 
@@ -310,11 +311,7 @@ func mustET(date, hms string) int64 {
 	if hms == "" {
 		return 0
 	}
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		panic(err)
-	}
-	t, err := time.ParseInLocation("2006-01-02 15:04:05", date+" "+hms, loc)
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", date+" "+hms, session.ET())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bad time %q %q: %v\n", date, hms, err)
 		os.Exit(2)

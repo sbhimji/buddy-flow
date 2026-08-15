@@ -6,6 +6,32 @@ deferrals live in `docs/foundations/data.md` §Deferred; story-scoped backlog bu
 stay on their story in `DEV-PLAN.md` — this file is for items that need more detail
 than a bullet.
 
+## ⚑ TOP ITEM — Macro + earnings calendar (baseline correctness; pick up first)
+
+**Logged:** 2026-08-12 (earnings half, D4 discussion); macro-calendar half moved here
+from story 2.1 on 2026-08-15 to clear the path to a Monday trader POC. **Lands in:**
+2.1 baselines as a refinement + the nightly ledger.
+
+**Macro calendar (was 2.1 scope).** The static calendar file: trading days, half days,
+FOMC/CPI-class macro-day flags (2026-08-11 was CPI). Why deferral is numerically safe
+*right now*: D4's accepted policy is flag-and-**include** — the flag changes no baseline
+number in v1, it only annotates the ledger; and half-day *exclusion* [F11] only bites
+when a half-day enters the 20-day lookback (next US half-day is Thanksgiving week —
+this MUST land before late November). Until then 2.1 infers trading days from the aggs
+data itself (days that return bars) and treats every day as a full day.
+
+**Member-earnings-day flag (original entry).** A ticker's own earnings day distorts
+*its* 20-day profile far more than any macro day distorts everyone's — the morning
+after earnings can print 5–20× normal volume in every bucket; under median/MAD one such
+day is absorbed, but two in one lookback start to move the spread. Needs an earnings
+calendar source (new data dependency). Whether flagged earnings days should also be
+*excluded* per ticker changes what "normal" means for single names — that call is the
+trader's; take it to him when this is picked up.
+
+**When picked up:** one calendar module feeding both flags (macro = universe-wide,
+earnings = per-ticker), consumed by the profile builder and stamped into the nightly
+ledger; then remove the trading-days-inferred-from-data shortcut in 2.1.
+
 ## Trader's "Layers" spec reconciliation (deferred from story 0.5, needs trader)
 
 **Logged:** 2026-08-12. **Was:** DEV-PLAN story 0.5 [A9]; removed so Phase 0 can close.
@@ -20,19 +46,6 @@ never heard named may exist in his mental model of the product.
 **The ask when picked up:** get his layer list or five minutes walking through it;
 reconcile against §-numbering; capture the Layer 8 definition **before** scoping or
 building anything called leadership-divergence.
-
-## Member-earnings-day baseline flag (LOW priority — trader input wanted)
-
-**Logged:** 2026-08-12 (D4 discussion). **Lands in:** story 2.1 baselines, as a refinement.
-
-A ticker's own earnings day distorts *its* 20-day profile far more than any macro day
-distorts everyone's — the morning after earnings can print 5–20× normal volume in every
-bucket, and under median/MAD one such day is absorbed, but two in one lookback start to
-move the spread. v1 handles macro days only (D4: flag + include, macro-dates calendar).
-The refinement: flag member-earnings days in per-ticker profiles (needs an earnings
-calendar source — new data dependency, hence deferred). Whether flagged earnings days
-should also be *excluded* per ticker changes what "normal" means for single names —
-that call is the trader's; take it to him when this is picked up.
 
 ## Cancels/corrections — nightly reconciliation (LOW priority)
 
@@ -199,3 +212,39 @@ pre-3.3 file means "not recorded then", never an error and never a silent zero
 presented as a measurement. Only the 1.4 base columns may hard-error when missing.
 Contract is also documented on `ReadCSV` itself; acceptance for the 3.3 change
 should include reading a real pre-3.3 bucket file.
+
+## 1.5 — Ingest data-quality monitoring (deferred from Phase 1, 2026-08-15)
+
+Moved out of the critical path to prioritize trader-visible output (2.1 baselines →
+3.0 dev view). Not dropped: the story's two *surfaces* don't exist yet — "live in the
+dev view" needs 3.0, "nightly data-quality block" needs the ledger (6.5) — so the story
+re-enters with those. **Re-entry:** when 3.0 lands, surface the already-collected
+counters there (nearly free); when 6.5 lands, add the nightly block.
+
+**Already running in code today (collection exists; only the reporting is deferred):**
+per-symbol trade/quote counters, sequence-regression counters (trades/quotes),
+decode-error / unknown-symbol / status counts, `CondOverflow`, the unknown-condition
+tripwire (per-ID counts, printed at session end and carried in the bucket store),
+manifest message counts (reconciliation numbers), capture integrity via
+manifest-absence, queue high-water mark.
+
+**Agreed metrics (from the original story, unbuilt):**
+- Late-print lag distribution — `report_ts − execution_ts` per print, per venue class
+  (exchange / TRF / out-of-sequence); nightly p50/p95/p99/max. Note: the flat-file
+  lateness *study* that sizes 3.3's quote-memory window is its own backlog entry and is
+  NOT deferred by this move.
+- Unaccounted condition codes — count, first-seen, one sample print, nightly ledger
+  line. (The runtime tripwire half already exists; first-seen sample + ledger line
+  pend.)
+
+**Proposed metrics (trim at mini-spec time, unchanged from the original list):**
+classification-quality shares (per 3.3); message-count reconciliation vs vendor totals
+as a permanent nightly check; sequence-gap counter; feed liveness/silence per symbol
+group; quote staleness at classification; crossed/locked NBBO time (feeds D9); ingest
+throughput + queue depth + per-stage latency (feeds 6.2); clock drift; capture-file
+integrity + disk headroom; halt detection (LULD — may deserve its own story; touches
+3.7 breadth denominators and tile rendering).
+
+**Done-when (unchanged):** agreed metrics visible in the 3.0 dev view on a replayed
+session; nightly ledger entry contains the session's data-quality block; replaying the
+same capture twice produces identical monitoring numbers.

@@ -18,6 +18,18 @@ type NopCapture struct{}
 
 func (NopCapture) Append([]byte) error { return nil }
 
+// Observer is the 1.4 seam: downstream consumers of processed messages
+// (the bucket store; later Phase 3 metrics) implement it and register via
+// SetObserver. Both methods are called from Run's single consumer goroutine,
+// after the symbol state has been updated, so an observer sees messages in
+// pipeline order and needs no synchronization against the pipeline itself
+// (only against its own concurrent readers). The interface lives here, and
+// implementations import ingest — never the reverse (no import cycle).
+type Observer interface {
+	ObserveTrade(*Trade)
+	ObserveQuote(*Quote)
+}
+
 // DefaultQueueSize buffers ~15s of the 120k msg/sec floor (~2M messages,
 // ~500MB at Msg size). Sized so that even a pathological multi-second
 // consumer stall cannot force a drop; the queue-depth counter tells us if
@@ -31,6 +43,7 @@ const DefaultQueueSize = 2_000_000
 type Pipeline struct {
 	table *Table
 	queue chan Msg
+	obs   Observer // optional; set before Run starts, never mutated after
 
 	// Monitoring counters (atomics: readable live without blocking).
 	Processed     atomic.Int64 // messages fully applied
@@ -49,6 +62,10 @@ func NewPipeline(table *Table, queueSize int) *Pipeline {
 
 // Table exposes the symbol table (dev view, tests, spot checks).
 func (p *Pipeline) Table() *Table { return p.table }
+
+// SetObserver registers the downstream observer. Must be called before the
+// Run goroutine starts — the field is read without synchronization.
+func (p *Pipeline) SetObserver(o Observer) { p.obs = o }
 
 // Submit enqueues one message. Blocks on a full queue (backpressure).
 // Called by feeder goroutines; safe for multiple concurrent feeders
@@ -72,8 +89,14 @@ func (p *Pipeline) Run() {
 		switch m.Kind {
 		case KindTrade:
 			m.Trade.State.applyTrade(&m.Trade)
+			if p.obs != nil {
+				p.obs.ObserveTrade(&m.Trade)
+			}
 		case KindQuote:
 			m.Quote.State.applyQuote(&m.Quote)
+			if p.obs != nil {
+				p.obs.ObserveQuote(&m.Quote)
+			}
 		}
 		p.Processed.Add(1)
 	}

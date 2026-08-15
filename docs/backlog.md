@@ -89,6 +89,33 @@ or during Phase 1 flat-file analysis at the latest):**
 - Details + summary both print → `G` = `DUPLICATE` (summary print carries the volume).
 - `G` prints alone → `G` = `CROSS_OPEN` / `CROSS_REOPEN` per the auction it belongs to.
 
+## Late-print lateness analysis → sizes 3.3's quote-memory window (flat-file study)
+
+**Logged:** 2026-08-14 (decided in discussion). **Lands in:** a
+`discovery-scripts` analysis whose numbers go into story 3.3's mini-spec;
+complements (does not replace) the 1.5 live late-print lag metric.
+
+**What:** offline study over full-session flat files (2026-08-11, -13, -14, and
+future sessions): for every trade, lateness = `sip_timestamp − participant_timestamp`.
+Report the distribution (p50/p95/p99/max) overall and split by venue class
+(exchange vs TRF) and by late-marked conditions (5, 32, 33); share of prints later
+than 1s / 5s / 30s / 5min; and the same cuts **dollar-weighted** (one large late TRF
+print matters more than many tiny ones). Evidence already in hand pointing the same
+direction: 2.8% of universe prints on 08-11 arrived sequence-regressed, all trade-side.
+
+**Why:** story 3.3's quote-relative classification wants the NBBO *as of execution
+time*. How much quote history to keep in memory (the ring-buffer window) should be
+sized from measured lateness percentiles, not guessed. The flat files let us measure
+this now, across whole sessions, before any live 1.5 data accumulates.
+
+**Scope decision recorded (2026-08-14):** the immediate 3.3 story classifies only
+**on-time prints** — execution time within a small tolerance of report time — against
+the *current* in-memory NBBO. Late prints stay unclassified in v1 (they count in
+DeltaRatio's denominator only, consistent with the existing NON_PRICE_FORMING
+treatment). The ring-buffer / classify-against-pt upgrade is a separate follow-up
+gated on this analysis; the existing 3.3/0.3 backlog note about a rolling
+quote-history window merges into this item.
+
 ## Universe loader hardening + baskets schema field (schema half needs trader)
 
 **Logged:** 2026-08-13 (1.1 post-close code review). **Lands in:** `internal/universe`
@@ -160,3 +187,15 @@ order, and whether it earns screen space at all is the trader's call.
   so historical seeding needs no new procurement.
 - Trader decisions: what renders (pre-open strip? tile brightness before 09:30?),
   and whether post-market matters live or only as next-morning context.
+
+## Bucket CSV column-compatibility contract (binds story 3.3+, no work now)
+
+Recorded 2026-08-15 (1.4 code review). The bucket file's D3 promise — "3.3 adds
+columns without breaking old files" — creates an obligation on the FUTURE reader
+edit, not on 1.4: `bucket.ReadCSV` maps columns by header name and ignores unknown
+columns, so old readers already survive new files. Whoever adds columns (3.3 signed
+volume is the expected first case) must read them as **optional** — absent from a
+pre-3.3 file means "not recorded then", never an error and never a silent zero
+presented as a measurement. Only the 1.4 base columns may hard-error when missing.
+Contract is also documented on `ReadCSV` itself; acceptance for the 3.3 change
+should include reading a real pre-3.3 bucket file.

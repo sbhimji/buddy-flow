@@ -2,5 +2,6 @@
 data/
 docs/temp/
 .DS_Store
+.claude/
 
 discovery-scripts/flat-file-analysis/output/

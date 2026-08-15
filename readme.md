@@ -24,14 +24,14 @@ any speed.
 
 ```
 # instant (default): acceptance runs, batch checks
-go run ./cmd/ingest -capture data/capture/2026-08-13/stream.jsonl
+go run ./cmd/replay -capture data/capture/2026-08-13/stream.jsonl
 
 # real-time: frames at recorded wall-clock spacing (a 6.5h session takes 6.5h;
 # dead gaps are capped at 30s so a kill-hole doesn't stall you)
-go run ./cmd/ingest -capture data/capture/2026-08-13/stream.jsonl -speed 1
+go run ./cmd/replay -capture data/capture/2026-08-13/stream.jsonl -speed 1
 
 # accelerated ×20: a morning in ~20 minutes
-go run ./cmd/ingest -capture data/capture/2026-08-13/stream.jsonl -speed 20
+go run ./cmd/replay -capture data/capture/2026-08-13/stream.jsonl -speed 20
 ```
 
 Output: universe message counts, sequence-regression/malformed/decode
@@ -47,13 +47,13 @@ for count reconciliation, time-windowed studies, and stress testing.
 
 ```
 # full session, universe-filtered (the 1.1 acceptance run)
-go run ./cmd/ingest -trades data/flat-files/trades/2026-08-11.csv.gz -quotes data/flat-files/quotes/2026-08-11.csv.gz
+go run ./cmd/replay -trades data/flat-files/trades/2026-08-11.csv.gz -quotes data/flat-files/quotes/2026-08-11.csv.gz
 
 # time window (ET), e.g. book state as of 09:35:00 via -to
-go run ./cmd/ingest -quotes data/flat-files/quotes/2026-08-11.csv.gz -date 2026-08-11 -to 09:35:00
+go run ./cmd/replay -quotes data/flat-files/quotes/2026-08-11.csv.gz -date 2026-08-11 -to 09:35:00
 
 # whole-market stress mode (~5× universe load; skips the universe filter)
-go run ./cmd/ingest -trades data/flat-files/trades/2026-08-11.csv.gz -full
+go run ./cmd/replay -trades data/flat-files/trades/2026-08-11.csv.gz -full
 ```
 
 Note: `-from` truncates quote history, so final-NBBO output is suppressed on
@@ -65,8 +65,8 @@ Capture is unconditional — there is deliberately no flag to disable it.
 Start before the open; stops at 20:00 ET by default (full SIP session).
 
 ```
-go run ./cmd/capture                  # until 20:00 ET
-go run ./cmd/capture -until 16:30:00  # shorter (smoke tests)
+go run ./cmd/live                  # until 20:00 ET
+go run ./cmd/live -until 16:30:00  # shorter (smoke tests)
 ```
 
 Ctrl-C closes cleanly and writes the manifest; a second Ctrl-C hard-kills

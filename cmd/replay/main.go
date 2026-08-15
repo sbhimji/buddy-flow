@@ -59,10 +59,18 @@ func main() {
 	// A bucket file is a whole-session record; refuse runs that can only
 	// produce a structurally partial store (windowed seconds, a feed missing,
 	// non-universe symbols mixed in). Loud at flag parse, not a surprise file.
+	// One deliberate door (mini-spec 2.1 D3): a trades-only run may write
+	// buckets IF the filename self-declares it (`*.trades-only.csv`) — the
+	// profile bootstrap needs volume, not quotes, and the name means nothing
+	// downstream can mistake the file for a full session.
 	if *bucketsPath != "" && *capturePath == "" {
+		tradesOnly := strings.HasSuffix(*bucketsPath, bucket.TradesOnlySuffix)
 		switch {
-		case *tradesPath == "" || *quotesPath == "":
-			fmt.Fprintln(os.Stderr, "-buckets needs both -trades and -quotes (a one-feed bucket file would record a session that had no quotes/trades)")
+		case tradesOnly && (*tradesPath == "" || *quotesPath != ""):
+			fmt.Fprintln(os.Stderr, "a .trades-only.csv bucket file takes -trades alone")
+			os.Exit(2)
+		case !tradesOnly && (*tradesPath == "" || *quotesPath == ""):
+			fmt.Fprintln(os.Stderr, "-buckets needs both -trades and -quotes (a one-feed bucket file would record a session that had no quotes/trades); trades-only is allowed iff the path ends in .trades-only.csv")
 			os.Exit(2)
 		case *fromS != "" || *toS != "":
 			fmt.Fprintln(os.Stderr, "-buckets cannot be windowed (-from/-to): the file would masquerade as a full session")
@@ -126,6 +134,15 @@ func main() {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "capture replay failed (stats above are partial): %v\n", err)
 			os.Exit(3) // no bucket write: a partial file at the target path would masquerade as a session
+		}
+		// Captures are the one input that can legitimately produce a
+		// non-spanning store (late start, smoke run) — enforce D3 naming
+		// from the data itself rather than trusting the caller.
+		if store != nil {
+			if nerr := validateCaptureBucketName(store, *bucketsPath); nerr != nil {
+				fmt.Fprintln(os.Stderr, nerr)
+				os.Exit(2)
+			}
 		}
 		writeBuckets(store, *bucketsPath)
 		return
@@ -238,6 +255,42 @@ func main() {
 		os.Exit(3) // bad input file — distinct from exit 1 (lost messages) and 2 (flag misuse)
 	}
 	writeBuckets(store, *bucketsPath)
+}
+
+// validateCaptureBucketName enforces the D3 coverage-naming contract on the
+// one path that produces partial files: a capture-derived store that does
+// not span the regular session (coverage through the 16:00 closing cross)
+// must carry the .partial.csv suffix, and a spanning one must not — a
+// mislabeled full session would silently vanish from baselines. Captures
+// carry both feeds by construction, so a spanning store missing either side
+// is a broken subscription, not a session. The session date comes from the
+// data, not a flag.
+func validateCaptureBucketName(store *bucket.Store, path string) error {
+	if strings.HasSuffix(path, bucket.TradesOnlySuffix) {
+		return fmt.Errorf("%s names are for flat-file bootstrap runs; a capture replay carries quotes", bucket.TradesOnlySuffix)
+	}
+	minSec, maxSec, ok := store.Bounds()
+	if !ok {
+		return nil // empty store: nothing to misrepresent
+	}
+	date, spans, err := bucket.SpansRegularSession(minSec, maxSec)
+	if err != nil {
+		return err
+	}
+	partial := strings.HasSuffix(path, bucket.PartialSuffix)
+	hhmm := func(sec int64) string { return time.Unix(sec, 0).In(session.ET()).Format("15:04:05") }
+	if spans {
+		if trades, quotes := store.Totals(); trades == 0 || quotes == 0 {
+			return fmt.Errorf("capture spans %s but has trades=%d quotes=%d — a feed is missing; not writing a session bucket file", date, trades, quotes)
+		}
+	}
+	if spans && partial {
+		return fmt.Errorf("capture spans the regular session on %s (%s..%s ET): drop the %s suffix", date, hhmm(minSec), hhmm(maxSec), bucket.PartialSuffix)
+	}
+	if !spans && !partial {
+		return fmt.Errorf("capture does not span the regular session on %s (data %s..%s ET vs 09:30-16:00 incl. close): name the file *%s so it cannot enter baselines", date, hhmm(minSec), hhmm(maxSec), bucket.PartialSuffix)
+	}
+	return nil
 }
 
 // writeBuckets persists the 1.4 store and reports the unknown-condition

@@ -24,7 +24,9 @@ import (
 	"buddy-flow/internal/bucket"
 	"buddy-flow/internal/devview"
 	"buddy-flow/internal/feed"
+	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
+	"buddy-flow/internal/profile"
 	"buddy-flow/internal/session"
 	"buddy-flow/internal/universe"
 )
@@ -140,6 +142,41 @@ func main() {
 		if dv, err = devview.New(store, table, bks, *profilesDir); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
+		}
+		// 3.1 columns: share profiles + floors are hard requirements when
+		// viewing — a missing baseline must fail loudly, not render fake
+		// zeros (same posture as devview.New on per-ticker profiles).
+		union := map[string]bool{}
+		for _, b := range bks {
+			for _, m := range b.Members {
+				union[m] = true
+			}
+		}
+		unionSyms := make([]string, 0, len(union))
+		for sym := range union {
+			unionSyms = append(unionSyms, sym)
+		}
+		sort.Strings(unionSyms)
+		unionStates := make([]*ingest.SymbolState, 0, len(unionSyms))
+		for _, sym := range unionSyms {
+			unionStates = append(unionStates, table.Lookup(sym))
+		}
+		shares := map[string]*profile.ShareProfile{}
+		for _, b := range bks {
+			sp, err := profile.ReadShares(*profilesDir, b.Name, b.Members)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%v (rebuild with cmd/profiles?)\n", err)
+				os.Exit(1)
+			}
+			shares[b.Name] = sp
+		}
+		floors, err := profile.ReadFloors(*profilesDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v (rebuild with cmd/profiles?)\n", err)
+			os.Exit(1)
+		}
+		for _, c := range flowshare.Columns(store, unionStates, shares, floors) {
+			dv.Register(c)
 		}
 	}
 	switch { // before Run starts (pipeline contract)

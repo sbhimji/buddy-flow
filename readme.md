@@ -64,13 +64,17 @@ go run ./cmd/replay -capture data/capture/2026-08-14/stream.jsonl -view -view-at
 ```
 
 Baselines come from `-profiles` (default `data/profiles`) — build profiles
-first. Columns to date: `N` member count; `$last`, `base`, `rvol` — counted
-$vol of the last *completed* minute, that same minute's 20-day baseline
-(sum of member medians), and their ratio; `$now` — the in-progress minute
-accumulating (compared to nothing: a partial minute vs a full-minute
-baseline would always read low). The header names the minutes on screen.
-`·` is a defined gap (no baseline / outside the regular session), never a
-zero.
+first. Columns to date: `N` member count; the last *completed* minute's
+counted $vol, its 20-day matched-minute baseline (sum of member medians),
+and their ratio; the in-progress minute accumulating (compared to nothing:
+a partial minute vs a full-minute baseline would always read low); the 3.1
+flow columns — `flow_share` (in-progress minute's share of the tracked
+universe), `flow_share_z` (completed minute vs its 20d share baseline,
+σ-guarded), `concentration` (top member's % of basket $vol), and the
+since-open story `cum_share` / `cum_share_typ` / `cum_share_z` (share of
+the tape so far today vs typical by this time). The header names the
+minutes on screen. `·` is a defined gap (no baseline / outside the regular
+session), never a zero.
 
 ## Build baseline profiles (stories 2.1–2.2)
 

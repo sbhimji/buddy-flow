@@ -136,6 +136,12 @@ func TestRegisterColumn(t *testing.T) {
 	if fields := strings.Fields(lines[2]); fields[len(fields)-1] != "c!" {
 		t.Errorf("chips dummy cell = %v", fields)
 	}
+	// A registered Legend lands on the clock line (mini-spec 3.1 D5).
+	v.Register(Column{Name: "lg", Width: 2, Legend: "lg = whichever minute",
+		Cell: func(rc *RowCtx) string { return "-" }})
+	if header := strings.Split(v.Render(atSec), "\n")[0]; !strings.HasSuffix(header, "; lg = whichever minute") {
+		t.Errorf("clock line missing legend: %q", header)
+	}
 }
 
 // TestNewRejectsMissingProfile: a member without a profile must fail loudly

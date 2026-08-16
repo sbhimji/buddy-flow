@@ -21,10 +21,47 @@ type basketsFile struct {
 	} `json:"baskets"`
 }
 
-// Load returns the sorted, de-duplicated equity universe: all basket members
-// plus all benchmarks, excluding the bond_gate_futures group (ZN/ZB are a
-// separate futures dataset, backlogged — see docs/foundations/data.md).
-func Load(path string) ([]string, error) {
+// Basket is one trader-defined basket: its config key and its members,
+// full membership (display/tiles/glow/breadth keep full membership; only
+// 3.7's cross-basket narrative computes on disjoint sets).
+type Basket struct {
+	Name    string
+	Members []string
+}
+
+// LoadBaskets returns the baskets sorted by name, members sorted within
+// each — the deterministic row order the 3.0 dev view renders.
+func LoadBaskets(path string) ([]Basket, error) {
+	cfg, err := read(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(cfg.Baskets) == 0 {
+		return nil, fmt.Errorf("baskets config %s has no baskets", path)
+	}
+	out := make([]Basket, 0, len(cfg.Baskets))
+	for name, b := range cfg.Baskets {
+		if len(b.Members) == 0 {
+			return nil, fmt.Errorf("baskets config %s: basket %q has no members", path, name)
+		}
+		members := append([]string(nil), b.Members...)
+		sort.Strings(members)
+		// De-duplicate like Load does: the config is trader-edited, and a
+		// repeated member must not double-count in basket sums (full config
+		// validation is backlogged — universe loader hardening).
+		uniq := members[:0]
+		for i, m := range members {
+			if i == 0 || m != members[i-1] {
+				uniq = append(uniq, m)
+			}
+		}
+		out = append(out, Basket{Name: name, Members: uniq})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func read(path string) (*basketsFile, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read baskets config: %w", err)
@@ -32,6 +69,17 @@ func Load(path string) ([]string, error) {
 	var cfg basketsFile
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("parse baskets config %s: %w", path, err)
+	}
+	return &cfg, nil
+}
+
+// Load returns the sorted, de-duplicated equity universe: all basket members
+// plus all benchmarks, excluding the bond_gate_futures group (ZN/ZB are a
+// separate futures dataset, backlogged — see docs/foundations/data.md).
+func Load(path string) ([]string, error) {
+	cfg, err := read(path)
+	if err != nil {
+		return nil, err
 	}
 	set := map[string]struct{}{}
 	for group, syms := range cfg.Benchmarks {

@@ -146,6 +146,23 @@ func (s *Store) ObserveQuote(q *ingest.Quote) {
 	s.bucketFor(q.State, q.SipTs).Quotes++
 }
 
+// Window sums one symbol's buckets over [fromSec, toSec) into a value copy
+// — the dev-view read path promised in the Store doc. Seconds with no entry
+// contribute nothing (the zero they are). LastPrice/LastSipTs follow the
+// same latest-SIP-ts rule as live aggregation.
+func (s *Store) Window(st *ingest.SymbolState, fromSec, toSec int64) Bucket {
+	var out Bucket
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.buckets[st]
+	for sec := fromSec; sec < toSec; sec++ {
+		if b := m[sec]; b != nil {
+			out.add(b)
+		}
+	}
+	return out
+}
+
 // Unknown reports the tripwire: total prints carrying an unrecognized
 // condition ID, and per-ID counts (sorted by ID for deterministic output).
 func (s *Store) Unknown() (prints int64, ids []UnknownID) {

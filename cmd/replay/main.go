@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"buddy-flow/internal/bucket"
+	"buddy-flow/internal/devview"
 	"buddy-flow/internal/feed"
 	"buddy-flow/internal/ingest"
 	"buddy-flow/internal/session"
@@ -42,6 +43,9 @@ func main() {
 		queueSize   = flag.Int("queue", 0, "pipeline queue size (0 = default)")
 		nbboSyms    = flag.String("nbbo", "SPY,NVDA,AAPL", "comma-separated symbols to print final NBBO for (spot checks)")
 		bucketsPath = flag.String("buckets", "", "write the 1.4 bucket store CSV here after the run; empty = no buckets")
+		view        = flag.Bool("view", false, "3.0 developer view: auto-refreshing basket table (requires -capture; pace with -speed)")
+		profilesDir = flag.String("profiles", "data/profiles", "profile directory for -view baselines")
+		viewAt      = flag.String("view-at", "", "also render the -view table as of this ET HH:MM:SS after the replay (spot checks; buckets are event-time keyed, so any past second is exact)")
 	)
 	flag.Parse()
 	if *tradesPath == "" && *quotesPath == "" && *capturePath == "" {
@@ -51,6 +55,25 @@ func main() {
 	if *speed != 0 && *capturePath == "" {
 		fmt.Fprintln(os.Stderr, "-speed applies only to -capture replay")
 		os.Exit(2)
+	}
+	// The view needs a session clock; flat-file replay streams trades and
+	// quotes concurrently with meaningless cross-feed order, so "current
+	// time" only exists on capture replay (mini-spec 3.0 D2).
+	if *view && *capturePath == "" {
+		fmt.Fprintln(os.Stderr, "-view applies only to -capture replay")
+		os.Exit(2)
+	}
+	if *viewAt != "" {
+		if !*view {
+			fmt.Fprintln(os.Stderr, "-view-at requires -view")
+			os.Exit(2)
+		}
+		// Validate NOW: a malformed time must fail at flag parse, not after
+		// minutes of replay have already run.
+		if _, err := time.Parse("15:04:05", *viewAt); err != nil {
+			fmt.Fprintf(os.Stderr, "-view-at must be ET HH:MM:SS: %v\n", err)
+			os.Exit(2)
+		}
 	}
 	if *capturePath != "" && (*tradesPath != "" || *quotesPath != "" || *fromS != "" || *toS != "" || *full || *date != "") {
 		fmt.Fprintln(os.Stderr, "-capture replays alone (no -trades/-quotes/-from/-to/-full/-date)")
@@ -100,9 +123,30 @@ func main() {
 	p := ingest.NewPipeline(table, *queueSize)
 
 	var store *bucket.Store
-	if *bucketsPath != "" {
+	if *bucketsPath != "" || *view {
 		store = bucket.NewStore()
-		p.SetObserver(store) // before Run starts (pipeline contract)
+	}
+	// The view wraps the store (delegates + tracks the replayed clock), so
+	// one observer slot serves both; -buckets still writes the same store.
+	// Exactly one SetObserver call — the pipeline has a single slot, and a
+	// second call would silently replace the first.
+	var dv *devview.View
+	if *view {
+		bks, err := universe.LoadBaskets(*basketsPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if dv, err = devview.New(store, table, bks, *profilesDir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	switch { // before Run starts (pipeline contract)
+	case dv != nil:
+		p.SetObserver(dv)
+	case store != nil:
+		p.SetObserver(store)
 	}
 
 	fmt.Printf("universe: %d symbols  full=%v  window=[%s, %s)\n", table.Len(), *full, *fromS, *toS)
@@ -113,6 +157,7 @@ func main() {
 	// Capture replay (mini-spec 1.2 done-when #2): one sequential stream
 	// through the live decoder, then the same report path as flat files.
 	if *capturePath != "" {
+		stopRender := startRenderLoop(dv)
 		start := time.Now()
 		ls, err := feed.StreamCapture(*capturePath, p, feed.ReplayOptions{
 			Speed: *speed,
@@ -120,6 +165,10 @@ func main() {
 		})
 		p.Close()
 		<-done
+		stopRender()
+		if *viewAt != "" {
+			renderViewAt(dv, store, *viewAt)
+		}
 		fmt.Printf("capture: frames=%d trades=%d quotes=%d status=%d unknown=%d decode-errs=%d elapsed=%s\n",
 			ls.Frames, ls.Trades, ls.Quotes, ls.Status, ls.Unknown, ls.DecodeErrs,
 			time.Since(start).Round(time.Millisecond))
@@ -137,14 +186,17 @@ func main() {
 		}
 		// Captures are the one input that can legitimately produce a
 		// non-spanning store (late start, smoke run) — enforce D3 naming
-		// from the data itself rather than trusting the caller.
-		if store != nil {
+		// from the data itself rather than trusting the caller. Only when a
+		// file is actually being written: -view alone also builds a store.
+		if *bucketsPath != "" {
 			if nerr := validateCaptureBucketName(store, *bucketsPath); nerr != nil {
 				fmt.Fprintln(os.Stderr, nerr)
 				os.Exit(2)
 			}
+			writeBuckets(store, *bucketsPath) // reports the tripwire itself
+		} else {
+			reportTripwire(store) // -view-only runs still build a store; its tripwire must still be read
 		}
-		writeBuckets(store, *bucketsPath)
 		return
 	}
 
@@ -257,6 +309,84 @@ func main() {
 	writeBuckets(store, *bucketsPath)
 }
 
+// startRenderLoop drives the -view refresh: re-render whenever the REPLAYED
+// clock has crossed a second (checked on a wall-clock ticker — the renderer
+// itself is pure and never sees wall time). Instant replay naturally
+// collapses to a render or two plus the final one. The returned stop must
+// be called after the pipeline drains; it prints the final table into
+// scrollback (no clear) so the session's last state survives above the
+// stats. No-op when dv is nil.
+func startRenderLoop(dv *devview.View) (stop func()) {
+	if dv == nil {
+		return func() {}
+	}
+	quit := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tick := time.NewTicker(250 * time.Millisecond)
+		defer tick.Stop()
+		var last int64
+		for {
+			select {
+			case <-quit:
+				return
+			case <-tick.C:
+				if sec := dv.ClockSec(); sec > last {
+					last = sec
+					fmt.Print("\033[H\033[2J" + dv.Render(sec))
+				}
+			}
+		}
+	}()
+	return func() {
+		close(quit)
+		wg.Wait()
+		if sec := dv.ClockSec(); sec > 0 {
+			fmt.Println()
+			fmt.Print(dv.Render(sec))
+		}
+	}
+}
+
+// hhmm formats an epoch second as ET wall-clock time.
+func hhmm(sec int64) string { return time.Unix(sec, 0).In(session.ET()).Format("15:04:05") }
+
+// renderViewAt prints the -view table as of an ET HH:MM:SS on the replayed
+// session's date (buckets are event-time keyed, so a post-hoc render is
+// exact). Diagnostics, never silence: an empty replay says so, and a second
+// outside the captured span is flagged — an all-zero table must be
+// distinguishable from "you asked about time we have no data for". hms is
+// already format-validated at flag parse.
+func renderViewAt(dv *devview.View, store *bucket.Store, hms string) {
+	clockSec := dv.ClockSec()
+	if clockSec == 0 {
+		fmt.Fprintf(os.Stderr, "-view-at %s: replay produced no messages; no session date to resolve against\n", hms)
+		return
+	}
+	sec := mustET(session.Date(clockSec*1e9), hms) / 1e9
+	if minSec, maxSec, ok := store.Bounds(); ok && (sec < minSec || sec > maxSec) {
+		fmt.Fprintf(os.Stderr, "note: -view-at %s is outside the captured span (%s..%s ET) — the table below reads zero because there is no data there\n",
+			hms, hhmm(minSec), hhmm(maxSec))
+	}
+	fmt.Println()
+	fmt.Print(dv.Render(sec))
+}
+
+// reportTripwire prints the 0.3 unknown-condition tripwire. Consulted on
+// every path that builds a store: writeBuckets covers -buckets runs, and
+// the -view-only path calls it directly — a tripwire nobody reads is no
+// tripwire. Nil-safe.
+func reportTripwire(store *bucket.Store) {
+	if store == nil {
+		return
+	}
+	if n, ids := store.Unknown(); n > 0 {
+		fmt.Printf("!! tripwire: %d prints carried condition IDs missing from the 0.3 table: %v\n", n, ids)
+	}
+}
+
 // validateCaptureBucketName enforces the D3 coverage-naming contract on the
 // one path that produces partial files: a capture-derived store that does
 // not span the regular session (coverage through the 16:00 closing cross)
@@ -278,7 +408,6 @@ func validateCaptureBucketName(store *bucket.Store, path string) error {
 		return err
 	}
 	partial := strings.HasSuffix(path, bucket.PartialSuffix)
-	hhmm := func(sec int64) string { return time.Unix(sec, 0).In(session.ET()).Format("15:04:05") }
 	if spans {
 		if trades, quotes := store.Totals(); trades == 0 || quotes == 0 {
 			return fmt.Errorf("capture spans %s but has trades=%d quotes=%d — a feed is missing; not writing a session bucket file", date, trades, quotes)
@@ -297,7 +426,7 @@ func validateCaptureBucketName(store *bucket.Store, path string) error {
 // tripwire. No-op when -buckets was not given. Only called on clean runs —
 // a bucket file from a partial run would masquerade as a full session.
 func writeBuckets(store *bucket.Store, path string) {
-	if store == nil {
+	if store == nil || path == "" {
 		return
 	}
 	rows, err := store.WriteCSV(path)
@@ -306,9 +435,7 @@ func writeBuckets(store *bucket.Store, path string) {
 		os.Exit(1)
 	}
 	fmt.Printf("buckets: %d (second,symbol) rows -> %s\n", rows, path)
-	if n, ids := store.Unknown(); n > 0 {
-		fmt.Printf("!! tripwire: %d prints carried condition IDs missing from the 0.3 table: %v\n", n, ids)
-	}
+	reportTripwire(store)
 }
 
 // reportState prints universe totals, the busiest symbols, and (when

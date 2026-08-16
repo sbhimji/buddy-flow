@@ -45,6 +45,37 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestLoadBaskets(t *testing.T) {
+	path := write(t, `{
+		"benchmarks": {"broad": ["SPY"]},
+		"baskets": {
+			"b": {"members": ["NVDA", "AAPL", "NVDA"], "benchmark": "SPY"},
+			"a": {"members": ["MSFT"], "benchmark": "SPY"}
+		}
+	}`)
+	bks, err := LoadBaskets(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sorted by name; members sorted and DEDUPED (a repeated member in the
+	// trader-edited config must not double-count in basket sums).
+	if len(bks) != 2 || bks[0].Name != "a" || bks[1].Name != "b" {
+		t.Fatalf("baskets = %+v", bks)
+	}
+	if got := bks[1].Members; len(got) != 2 || got[0] != "AAPL" || got[1] != "NVDA" {
+		t.Fatalf("basket b members = %v, want [AAPL NVDA] (sorted, deduped)", got)
+	}
+}
+
+func TestLoadBasketsRejectsEmpty(t *testing.T) {
+	if _, err := LoadBaskets(write(t, `{"baskets": {}}`)); err == nil {
+		t.Fatal("no baskets must error")
+	}
+	if _, err := LoadBaskets(write(t, `{"baskets": {"a": {"members": []}}}`)); err == nil {
+		t.Fatal("memberless basket must error")
+	}
+}
+
 func TestLoadEmptyUniverseIsError(t *testing.T) {
 	path := write(t, `{"benchmarks": {"bond_gate_futures": ["ZN"]}, "baskets": {}}`)
 	if _, err := Load(path); err == nil {

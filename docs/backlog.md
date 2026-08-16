@@ -186,7 +186,14 @@ change produces a new version without touching history" to the first loader modu
 read-and-count skeleton, but the deferral was recorded nowhere until now. Effective-date
 stamping is a CLAUDE.md invariant (historical replays must use historical membership);
 it becomes load-bearing no later than Phase 2 baselines. Validation (empty baskets,
-duplicate members, unknown-symbol checks) should land with it.
+duplicate members, unknown-symbol checks) should land with it. **Blast radius widened
+2026-08-16 (3.0 review):** `LoadBaskets` now feeds *current* membership into historical
+capture replays for the dev view — a config edit between a session and its replay
+silently changes what the replayed table shows. Tolerable while the PM isn't editing
+yet and the view is a dev instrument; the fix is the same effective-date mechanism, and
+the config schema (trader-owned) still carries no dates to consume — that schema ask
+rides with the `equity: false` proposal below. (`LoadBaskets` de-duplicates members as
+of the same review; full validation still pends here.)
 
 **Schema proposal for the trader:** the engine currently excludes non-equity symbols by
 matching the trader-owned group *name* `bond_gate_futures` — a string the trader may

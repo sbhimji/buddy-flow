@@ -13,12 +13,14 @@ package flowshare
 
 import (
 	"fmt"
+	"sort"
 
 	"buddy-flow/internal/bucket"
 	"buddy-flow/internal/devview"
 	"buddy-flow/internal/ingest"
 	"buddy-flow/internal/profile"
 	"buddy-flow/internal/session"
+	"buddy-flow/internal/universe"
 	"buddy-flow/internal/zguard"
 )
 
@@ -113,6 +115,62 @@ func Concentration(store *bucket.Store, basket []*ingest.SymbolState, fromSec, t
 
 const gap = "·"
 
+// SignificantZ is the trader-view highlight threshold (trader-view-v0 T2):
+// |cum_share_z| at or beyond it renders bold green/red by sign. A default
+// like every other — tunable at the nightly ledger review, not config yet.
+const SignificantZ = 2.0
+
+const (
+	sgrGreen = "\x1b[1;32m"
+	sgrRed   = "\x1b[1;31m"
+)
+
+// Union resolves the D1 denominator — every distinct basket member, sorted
+// — against the symbol table. Errors on a member missing from the table
+// (universe.Load includes all members, so that means mismatched configs).
+func Union(baskets []universe.Basket, table *ingest.Table) ([]*ingest.SymbolState, error) {
+	set := map[string]bool{}
+	for _, b := range baskets {
+		for _, m := range b.Members {
+			set[m] = true
+		}
+	}
+	syms := make([]string, 0, len(set))
+	for s := range set {
+		syms = append(syms, s)
+	}
+	sort.Strings(syms)
+	out := make([]*ingest.SymbolState, 0, len(syms))
+	for _, s := range syms {
+		st := table.Lookup(s)
+		if st == nil {
+			return nil, fmt.Errorf("basket member %s not in symbol table", s)
+		}
+		out = append(out, st)
+	}
+	return out, nil
+}
+
+// LoadBaselines reads every basket's share profile (enforcing the D2a
+// membership stamp) and the floors — the hard prerequisites for any share
+// column. A missing or stale baseline errors loudly; fake zeros are not an
+// option.
+func LoadBaselines(profilesDir string, baskets []universe.Basket) (map[string]*profile.ShareProfile, *profile.Floors, error) {
+	shares := map[string]*profile.ShareProfile{}
+	for _, b := range baskets {
+		sp, err := profile.ReadShares(profilesDir, b.Name, b.Members)
+		if err != nil {
+			return nil, nil, err
+		}
+		shares[b.Name] = sp
+	}
+	floors, err := profile.ReadFloors(profilesDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return shares, floors, nil
+}
+
 // winSnap is one window's union snapshot: every union member's counted $vol
 // read in a single pass. All rows of a render divide by the SAME reads, so
 // (a) no basket can exceed 100% (its numerator sums a subset of the same
@@ -164,112 +222,200 @@ func (w *winSnap) share(basket []*ingest.SymbolState) (float64, bool) {
 // The two window snapshots are memoized across rows of a render (same
 // posture as RowCtx memoization: cells run on the single render goroutine
 // — the render loop, then the final render — never concurrently).
-func Columns(store *bucket.Store, union []*ingest.SymbolState, shares map[string]*profile.ShareProfile, floors *profile.Floors) []devview.Column {
-	var curWin, prevWin, cumWin winSnap
-	prevShare := func(rc *devview.RowCtx) (float64, bool) {
-		cur := session.MinuteStart(rc.AtSec * 1e9)
-		prevWin.get(store, union, cur-60, cur, rc.AtSec)
-		return prevWin.share(rc.Basket.States)
+// cells is the shared plumbing behind both column sets: the window
+// snapshots plus the D7 cumulative-window logic. One instance per composed
+// view (dev or trader) — snapshots memoize per render (see winSnap).
+type cells struct {
+	store  *bucket.Store
+	union  []*ingest.SymbolState
+	shares map[string]*profile.ShareProfile
+	floors *profile.Floors
+
+	curWin, prevWin, cumWin winSnap
+}
+
+func (c *cells) prevShare(rc *devview.RowCtx) (float64, bool) {
+	cur := session.MinuteStart(rc.AtSec * 1e9)
+	c.prevWin.get(c.store, c.union, cur-60, cur, rc.AtSec)
+	return c.prevWin.share(rc.Basket.States)
+}
+
+// cumWindow is the D7 window: open through the end of the last completed
+// minute, clamped at the close so post-close renders show the whole-day
+// share. key is the matched-bucket minute for the baseline. ok=false
+// before the first completed session minute.
+func (c *cells) cumWindow(atSec int64) (fromSec, toSec int64, key int, ok bool) {
+	date := session.Date(atSec * 1e9)
+	openSec, err1 := session.BucketStart(date, session.OpenMinute)
+	closeSec, err2 := session.BucketStart(date, session.CloseMinute)
+	if err1 != nil || err2 != nil {
+		return 0, 0, 0, false
 	}
-	// cumWindow is the D7 window: open through the end of the last
-	// completed minute, clamped at the close so post-close renders show the
-	// whole-day share. key is the matched-bucket minute for the baseline.
-	// ok=false before the first completed session minute.
-	cumWindow := func(atSec int64) (fromSec, toSec int64, key int, ok bool) {
-		date := session.Date(atSec * 1e9)
-		openSec, err1 := session.BucketStart(date, session.OpenMinute)
-		closeSec, err2 := session.BucketStart(date, session.CloseMinute)
-		if err1 != nil || err2 != nil {
-			return 0, 0, 0, false
-		}
-		end := session.MinuteStart(atSec * 1e9)
-		if end > closeSec {
-			end = closeSec
-		}
-		if end <= openSec {
-			return 0, 0, 0, false
-		}
-		return openSec, end, session.MinuteOfDay((end - 60) * 1e9), true
+	end := session.MinuteStart(atSec * 1e9)
+	if end > closeSec {
+		end = closeSec
 	}
-	cumShare := func(rc *devview.RowCtx) (float64, int, bool) {
-		from, to, key, ok := cumWindow(rc.AtSec)
+	if end <= openSec {
+		return 0, 0, 0, false
+	}
+	return openSec, end, session.MinuteOfDay((end - 60) * 1e9), true
+}
+
+func (c *cells) cumShare(rc *devview.RowCtx) (float64, int, bool) {
+	from, to, key, ok := c.cumWindow(rc.AtSec)
+	if !ok {
+		return 0, 0, false
+	}
+	c.cumWin.get(c.store, c.union, from, to, rc.AtSec)
+	s, ok := c.cumWin.share(rc.Basket.States)
+	return s, key, ok
+}
+
+// cumZ computes the guarded cumulative z for a row, all gates applied.
+func (c *cells) cumZ(rc *devview.RowCtx) (float64, bool) {
+	prof := c.shares[rc.Basket.Name]
+	if prof == nil {
+		return 0, false
+	}
+	s, key, sOK := c.cumShare(rc)
+	return CumShareZ(s, sOK, prof, c.floors, key)
+}
+
+func (c *cells) cumShareCol() devview.Column {
+	return devview.Column{Name: "cum_share", Width: 9,
+		Legend: "cum_share* = since open through completed minute",
+		Cell: func(rc *devview.RowCtx) string {
+			s, _, ok := c.cumShare(rc)
+			if !ok {
+				return gap
+			}
+			return fmt.Sprintf("%.2f%%", 100*s)
+		}}
+}
+
+func (c *cells) cumShareTypCol() devview.Column {
+	return devview.Column{Name: "cum_share_typ", Width: 13, Cell: func(rc *devview.RowCtx) string {
+		prof := c.shares[rc.Basket.Name]
+		if prof == nil {
+			return gap
+		}
+		_, key, ok := c.cumShare(rc)
 		if !ok {
-			return 0, 0, false
+			return gap
 		}
-		cumWin.get(store, union, from, to, rc.AtSec)
-		s, ok := cumWin.share(rc.Basket.States)
-		return s, key, ok
+		// The typical is a measurement of history: shown whenever any
+		// day sampled this minute; only the z carries the 10-day gate.
+		row, ok := prof.Minute(key)
+		if !ok || row.CumDays == 0 {
+			return gap
+		}
+		return fmt.Sprintf("%.2f%%", 100*row.MedianCumShare)
+	}}
+}
+
+func (c *cells) cumShareZCol(style bool) devview.Column {
+	col := devview.Column{Name: "cum_share_z", Width: 11, Cell: func(rc *devview.RowCtx) string {
+		z, ok := c.cumZ(rc)
+		if !ok {
+			return gap
+		}
+		return fmt.Sprintf("%+.1f", z)
+	}}
+	if style {
+		// T2: |z| ≥ SignificantZ renders bold green/red by SIGN — a
+		// statement of measurement (share above/below its own typical),
+		// never buy/sell language.
+		col.Style = func(rc *devview.RowCtx) string {
+			z, ok := c.cumZ(rc)
+			switch {
+			case !ok || z < SignificantZ && z > -SignificantZ:
+				return ""
+			case z > 0:
+				return sgrGreen
+			default:
+				return sgrRed
+			}
+		}
 	}
+	return col
+}
+
+func (c *cells) concentrationCol() devview.Column {
+	return devview.Column{Name: "concentration", Width: 13, Cell: func(rc *devview.RowCtx) string {
+		cur := session.MinuteStart(rc.AtSec * 1e9)
+		sym, frac, ok := Concentration(c.store, rc.Basket.States, cur-60, cur)
+		if !ok {
+			return gap
+		}
+		return fmt.Sprintf("%s %.0f%%", sym, 100*frac)
+	}}
+}
+
+// Columns builds the three 3.1 dev-view columns (registered by the command
+// — mini-spec D6: registry only, no renderer changes). flow_share describes
+// the in-progress minute (a ratio is meaningful intra-minute); flow_share_z
+// and concentration describe the last completed minute, like the other
+// completed-minute columns.
+//
+// The window snapshots are memoized across rows of a render (same posture
+// as RowCtx memoization: cells run on the single render goroutine — the
+// render loop, then the final render — never concurrently).
+func Columns(store *bucket.Store, union []*ingest.SymbolState, shares map[string]*profile.ShareProfile, floors *profile.Floors) []devview.Column {
+	c := &cells{store: store, union: union, shares: shares, floors: floors}
 	return []devview.Column{
 		{Name: "flow_share", Width: 10,
 			Legend: "flow_share = in-progress minute; flow_share_z/concentration = completed minute",
 			Cell: func(rc *devview.RowCtx) string {
 				cur := session.MinuteStart(rc.AtSec * 1e9)
-				curWin.get(store, union, cur, rc.AtSec+1, rc.AtSec)
-				s, ok := curWin.share(rc.Basket.States)
+				c.curWin.get(c.store, c.union, cur, rc.AtSec+1, rc.AtSec)
+				s, ok := c.curWin.share(rc.Basket.States)
 				if !ok {
 					return gap
 				}
 				return fmt.Sprintf("%.2f%%", 100*s)
 			}},
 		{Name: "flow_share_z", Width: 12, Cell: func(rc *devview.RowCtx) string {
-			prof := shares[rc.Basket.Name]
+			prof := c.shares[rc.Basket.Name]
 			if prof == nil {
 				return gap
 			}
-			s, sOK := prevShare(rc)
+			s, sOK := c.prevShare(rc)
 			cur := session.MinuteStart(rc.AtSec * 1e9)
-			z, ok := ShareZ(s, sOK, prof, floors, session.MinuteOfDay((cur-60)*1e9))
+			z, ok := ShareZ(s, sOK, prof, c.floors, session.MinuteOfDay((cur-60)*1e9))
 			if !ok {
 				return gap
 			}
 			return fmt.Sprintf("%+.1f", z)
 		}},
-		{Name: "concentration", Width: 13, Cell: func(rc *devview.RowCtx) string {
-			cur := session.MinuteStart(rc.AtSec * 1e9)
-			sym, frac, ok := Concentration(store, rc.Basket.States, cur-60, cur)
-			if !ok {
-				return gap
-			}
-			return fmt.Sprintf("%s %.0f%%", sym, 100*frac)
-		}},
-		{Name: "cum_share", Width: 9,
-			Legend: "cum_share* = since open through completed minute",
-			Cell: func(rc *devview.RowCtx) string {
-				s, _, ok := cumShare(rc)
-				if !ok {
-					return gap
-				}
-				return fmt.Sprintf("%.2f%%", 100*s)
-			}},
-		{Name: "cum_share_typ", Width: 13, Cell: func(rc *devview.RowCtx) string {
-			prof := shares[rc.Basket.Name]
-			if prof == nil {
-				return gap
-			}
-			_, key, ok := cumShare(rc)
-			if !ok {
-				return gap
-			}
-			// The typical is a measurement of history: shown whenever any
-			// day sampled this minute; only the z carries the 10-day gate.
-			row, ok := prof.Minute(key)
-			if !ok || row.CumDays == 0 {
-				return gap
-			}
-			return fmt.Sprintf("%.2f%%", 100*row.MedianCumShare)
-		}},
-		{Name: "cum_share_z", Width: 11, Cell: func(rc *devview.RowCtx) string {
-			prof := shares[rc.Basket.Name]
-			if prof == nil {
-				return gap
-			}
-			s, key, sOK := cumShare(rc)
-			z, ok := CumShareZ(s, sOK, prof, floors, key)
-			if !ok {
-				return gap
-			}
-			return fmt.Sprintf("%+.1f", z)
-		}},
+		c.concentrationCol(),
+		c.cumShareCol(),
+		c.cumShareTypCol(),
+		c.cumShareZCol(false),
 	}
+}
+
+// TraderColumns composes the trader-view-v0 set: the since-open story,
+// one instantaneous pulse (relative_vol), and concentration — sorted by
+// the returned rank (cum z descending, gaps last). No per-minute share z:
+// it flickers; the cumulative z carries the story.
+func TraderColumns(store *bucket.Store, union []*ingest.SymbolState, shares map[string]*profile.ShareProfile, floors *profile.Floors) (cols []devview.Column, rank func(rc *devview.RowCtx) (float64, bool)) {
+	c := &cells{store: store, union: union, shares: shares, floors: floors}
+	relVol := devview.Column{Name: "relative_vol", Width: 12,
+		Legend: "relative_vol = completed minute's $vol vs its 20d matched-minute baseline",
+		Cell: func(rc *devview.RowCtx) string {
+			base, ok := rc.PrevMinuteBaseline()
+			if !ok || base == 0 {
+				return gap
+			}
+			return fmt.Sprintf("%.2f", rc.PrevMinuteCounted()/base)
+		}}
+	cum := c.cumShareCol()
+	cum.Legend = "cum_share* = share of tracked tape since open, through completed minute; bold = |z| ≥ 2"
+	return []devview.Column{
+		cum,
+		c.cumShareTypCol(),
+		c.cumShareZCol(true),
+		relVol,
+		c.concentrationCol(),
+	}, c.cumZ
 }

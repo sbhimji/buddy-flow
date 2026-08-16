@@ -117,8 +117,16 @@ Capture is unconditional — there is deliberately no flag to disable it.
 Start before the open; stops at 20:00 ET by default (full SIP session).
 
 ```
-go run ./cmd/live                  # until 20:00 ET
-go run ./cmd/live -until 16:30:00  # shorter (smoke tests)
+go run ./cmd/live                            # until 20:00 ET
+go run ./cmd/live -until 16:30:00            # shorter (smoke tests)
+go run ./cmd/live -view 2>live.log           # + trader view on stdout (logs -> stderr)
+```
+
+The trader view (docs/mini-specs/trader-view-v0.md) also runs on replay —
+same code path, same columns, cum-z sort, |z| ≥ 2 highlighted:
+
+```
+go run ./cmd/replay -capture data/capture/2026-08-14/stream.jsonl -view -view-mode trader -speed 60
 ```
 
 Ctrl-C closes cleanly and writes the manifest; a second Ctrl-C hard-kills

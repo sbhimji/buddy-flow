@@ -14,15 +14,19 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"buddy-flow/internal/bucket"
 	"buddy-flow/internal/capture"
+	"buddy-flow/internal/devview"
 	"buddy-flow/internal/feed"
+	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
 	"buddy-flow/internal/universe"
 )
@@ -34,6 +38,8 @@ func main() {
 		bucketsDir  = flag.String("buckets-dir", "data/buckets", "bucket store directory (1.4); session file is <dir>/<date>.csv (NB: cmd/replay's -buckets takes a file path)")
 		untilS      = flag.String("until", "20:00:00", "stop time, ET HH:MM:SS today")
 		url         = flag.String("url", "wss://socket.massive.com/stocks", "websocket endpoint")
+		view        = flag.Bool("view", false, "trader view (trader-view-v0): live basket table on stdout; operational logs divert to stderr (2>live.log)")
+		profilesDir = flag.String("profiles", "data/profiles", "profile directory for -view baselines")
 	)
 	flag.Parse()
 
@@ -63,16 +69,51 @@ func main() {
 	table := ingest.NewTable(syms)
 	p := ingest.NewPipeline(table, 0)
 	store := bucket.NewStore()
-	p.SetObserver(store) // before Run starts (pipeline contract)
+
+	// Operational logs go to stderr when the view owns stdout — `2>live.log`
+	// gives a clean table plus a complete log (trader-view-v0 T3).
+	logw := io.Writer(os.Stdout)
+	if *view {
+		logw = os.Stderr
+	}
+
+	// The view wraps the store as the single observer — same wiring as
+	// replay; the live SIP clock drives refresh exactly like the replayed
+	// one (event-time buckets are the point).
+	var dv *devview.View
+	if *view {
+		bks, err := universe.LoadBaskets(*basketsPath)
+		if err != nil {
+			fatal(err)
+		}
+		if dv, err = devview.New(store, table, bks, *profilesDir); err != nil {
+			fatal(err)
+		}
+		unionStates, err := flowshare.Union(bks, table)
+		if err != nil {
+			fatal(err)
+		}
+		shares, floors, err := flowshare.LoadBaselines(*profilesDir, bks)
+		if err != nil {
+			fatal(fmt.Errorf("%w (roll profiles first: go run ./cmd/profiles -days 20)", err))
+		}
+		cols, rank := flowshare.TraderColumns(store, unionStates, shares, floors)
+		dv.SetColumns(cols)
+		dv.SetRank(rank)
+		p.SetObserver(dv) // before Run starts (pipeline contract)
+	} else {
+		p.SetObserver(store) // before Run starts (pipeline contract)
+	}
 	pipeDone := make(chan struct{})
 	go func() { p.Run(); close(pipeDone) }()
+	stopRender := startRenderLoop(dv)
 
 	w, err := capture.NewWriter(*outDir, date)
 	if err != nil {
 		fatal(err)
 	}
 	w.Control("start", fmt.Sprintf("universe=%d until=%s", len(syms), until.Format("15:04:05")))
-	fmt.Printf("capturing %d symbols (T+Q) to %s until %s ET\n", len(syms), capture.StreamPath(*outDir, date), until.Format("15:04:05"))
+	fmt.Fprintf(logw, "capturing %d symbols (T+Q) to %s until %s ET\n", len(syms), capture.StreamPath(*outDir, date), until.Format("15:04:05"))
 
 	// Ctrl-C / SIGTERM → close stopCh, NOTHING else: the capture writer is
 	// the feeder's; a control record written from this goroutine could
@@ -85,7 +126,7 @@ func main() {
 	opt := feed.LiveOptions{
 		URL: *url, APIKey: key, Symbols: syms, Until: until, Stop: stopCh, Capture: w,
 		Log: func(f string, a ...any) {
-			fmt.Printf("[%s] "+f+"\n", append([]any{time.Now().In(loc).Format("15:04:05")}, a...)...)
+			fmt.Fprintf(logw, "[%s] "+f+"\n", append([]any{time.Now().In(loc).Format("15:04:05")}, a...)...)
 		},
 	}
 	sig := make(chan os.Signal, 2)
@@ -108,7 +149,7 @@ func main() {
 		for {
 			select {
 			case <-t.C:
-				fmt.Printf("[%s] frames=%d bytes=%dMB processed=%d queue-max=%d\n",
+				fmt.Fprintf(logw, "[%s] frames=%d bytes=%dMB processed=%d queue-max=%d\n",
 					time.Now().In(loc).Format("15:04:05"), w.Frames.Load(), w.Bytes.Load()>>20,
 					p.Processed.Load(), p.MaxQueueDepth.Load())
 			case <-stopped:
@@ -125,6 +166,7 @@ func main() {
 	// 1.5 reconciles against (review #4).
 	p.Close()
 	<-pipeDone
+	stopRender() // final table into scrollback; summary lines follow on stdout
 
 	reason := "session end"
 	select {
@@ -192,6 +234,45 @@ func main() {
 	}
 	if exitCode != 0 {
 		os.Exit(exitCode)
+	}
+}
+
+// startRenderLoop drives the -view refresh: re-render whenever the LIVE
+// clock (max SIP ts through the view) has crossed a second — the same
+// contract as cmd/replay's loop; the renderer itself is pure. Stop prints
+// the final table into scrollback (no clear) ahead of the session summary.
+// No-op when dv is nil.
+func startRenderLoop(dv *devview.View) (stop func()) {
+	if dv == nil {
+		return func() {}
+	}
+	quit := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tick := time.NewTicker(250 * time.Millisecond)
+		defer tick.Stop()
+		var last int64
+		for {
+			select {
+			case <-quit:
+				return
+			case <-tick.C:
+				if sec := dv.ClockSec(); sec > last {
+					last = sec
+					fmt.Print("\033[H\033[2J" + dv.Render(sec))
+				}
+			}
+		}
+	}()
+	return func() {
+		close(quit)
+		wg.Wait()
+		if sec := dv.ClockSec(); sec > 0 {
+			fmt.Println()
+			fmt.Print(dv.Render(sec))
+		}
 	}
 }
 

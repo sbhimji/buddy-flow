@@ -2,7 +2,9 @@
 
 Real-time money-flow observation instrument. Read `CLAUDE.md` first, then
 `docs/DEV-PLAN.md` — the project is spec-driven and the docs are normative.
-This file covers only what a developer can *run* today (through story 1.3).
+This file covers only what a developer can *run* today (through story 3.0).
+For what each data artifact *is* and what regenerates from what, see
+`docs/foundations/stores.md`.
 
 Requirements: Go 1.21+. Live capture additionally needs `MASSIVE_API_KEY` in
 `.env` at the repo root (gitignored). Replay needs no key and no market hours
@@ -14,6 +16,10 @@ Requirements: Go 1.21+. Live capture additionally needs `MASSIVE_API_KEY` in
 data/capture/<date>/stream.jsonl        captured live sessions (+ manifest.json)
 data/flat-files/trades/<date>.csv.gz    vendor flat files (whole market, by ticker)
 data/flat-files/quotes/<date>.csv.gz
+data/buckets/<date>.csv                 persisted 1-second bucket stores (1.4)
+                                        (.trades-only.csv = bootstrap; .partial.csv = never in baselines)
+data/profiles/<SYMBOL>.csv              20-day per-ticker minute baselines (2.1)
+data/profiles/_floors.csv               σ floors for every z (2.2)
 ```
 
 ## Replay a captured session
@@ -38,6 +44,48 @@ Output: universe message counts, sequence-regression/malformed/decode
 counters, top symbols, and final NBBO for spot-check symbols (`-nbbo
 SPY,NVDA,AAPL` to choose). Exit codes: 0 ok, 1 pipeline lost messages,
 2 flag misuse, 3 unreadable input.
+
+Add `-buckets data/buckets/<date>.csv` to persist the 1-second bucket store
+after the run (whole-session captures only; the filename must self-declare
+partial coverage — the command enforces this from the data).
+
+## Developer view (story 3.0)
+
+The learning instrument: one row per basket, one column per metric,
+auto-refreshing as the replayed clock advances. Capture replay only.
+
+```
+# watch a session at ×60 (an hour of tape per minute)
+go run ./cmd/replay -capture data/capture/2026-08-14/stream.jsonl -view -speed 60
+
+# instant, then render the table as of a chosen ET second (spot checks —
+# buckets are event-time keyed, so a post-hoc render is exact)
+go run ./cmd/replay -capture data/capture/2026-08-14/stream.jsonl -view -view-at 13:01:00
+```
+
+Baselines come from `-profiles` (default `data/profiles`) — build profiles
+first. Columns to date: `N` member count; `$last`, `base`, `rvol` — counted
+$vol of the last *completed* minute, that same minute's 20-day baseline
+(sum of member medians), and their ratio; `$now` — the in-progress minute
+accumulating (compared to nothing: a partial minute vs a full-minute
+baseline would always read low). The header names the minutes on screen.
+`·` is a defined gap (no baseline / outside the regular session), never a
+zero.
+
+## Build baseline profiles (stories 2.1–2.2)
+
+Nightly roll and bootstrap are the same command: discover the most recent
+20 bucket files, rebuild every profile from scratch, write the σ floors in
+the same run (`data/profiles/_floors.csv`, fraction from `-sigma-floor-frac`,
+default 0.25).
+
+```
+# build 189 profiles + floors from the last 20 days of bucket files
+go run ./cmd/profiles -days 20 -through 2026-08-13
+
+# RVOL sanity check of a session against existing profiles (reported, not gated)
+go run ./cmd/profiles -rvol-check data/buckets/2026-08-14.trades-only.csv -rvol-minute 13:00
+```
 
 ## Replay vendor flat files
 

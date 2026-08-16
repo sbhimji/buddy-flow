@@ -1,6 +1,7 @@
 // Command profiles builds the 20-day per-ticker volume profiles from bucket
-// files (mini-spec 2.1 PR 2: bucket files in, profiles out) and runs the
-// RVOL sanity check against a session's bucket file.
+// files (mini-spec 2.1 PR 2: bucket files in, profiles out) plus the σ floor
+// table _floors.csv (mini-spec 2.2, -sigma-floor-frac), and runs the RVOL
+// sanity check against a session's bucket file.
 //
 //	go run ./cmd/profiles -days 20 -through 2026-08-13
 //	go run ./cmd/profiles -rvol-check data/buckets/2026-08-14.csv -rvol-minute 13:00
@@ -13,6 +14,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -66,10 +68,15 @@ func main() {
 		through     = flag.String("through", "", "use only days <= this date (YYYY-MM-DD); the check-day must be excluded from its own baseline")
 		rvolCheck   = flag.String("rvol-check", "", "session bucket file to RVOL-check against existing profiles (skips building)")
 		rvolMinute  = flag.String("rvol-minute", "13:00", "ET minute for the RVOL check, HH:MM")
+		floorFrac   = flag.Float64("sigma-floor-frac", 0.25, "σ floor fraction (2.2 D2): floor = frac × universe median of sigma_family per minute; recorded in _floors.csv")
 	)
 	flag.Parse()
 	if *days < 1 {
 		fmt.Fprintf(os.Stderr, "-days must be >= 1 (got %d)\n", *days)
+		os.Exit(2)
+	}
+	if math.IsNaN(*floorFrac) || math.IsInf(*floorFrac, 0) || *floorFrac < 0 {
+		fmt.Fprintf(os.Stderr, "-sigma-floor-frac must be a nonnegative number (got %v)\n", *floorFrac)
 		os.Exit(2)
 	}
 	if *through != "" {
@@ -108,6 +115,25 @@ func main() {
 		fatal(err)
 	}
 	fmt.Printf("wrote %d profiles -> %s\n", len(profiles), *outDir)
+
+	// Floors build in the same run as every profile build (2.2 D2).
+	floors, err := profile.ComputeFloors(profiles, *floorFrac)
+	if err != nil {
+		fatal(err)
+	}
+	inputs := fmt.Sprintf("%d symbols x %d days (%s .. %s)",
+		len(syms), len(daysIn), daysIn[0].Date, daysIn[len(daysIn)-1].Date)
+	if err := profile.WriteFloors(*outDir, floors, *floorFrac, inputs); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("wrote floors -> %s\n", filepath.Join(*outDir, profile.FloorsFile))
+	// Spot sanity (2.2 done-when #4; reported, not gated): open-minute
+	// floors should be visibly larger than midday — volume σ scales with
+	// volume.
+	open, _ := floors.Minute(9*60 + 35)
+	mid, _ := floors.Minute(13 * 60)
+	fmt.Printf("σ floors (frac=%v): shares 09:35=%.4g 13:00=%.4g | dollars 09:35=%.4g 13:00=%.4g (expect 09:35 larger)\n",
+		*floorFrac, open.SigmaFloorShares, mid.SigmaFloorShares, open.SigmaFloorDollars, mid.SigmaFloorDollars)
 }
 
 // discoverDays lists bucket files, prefers full-session files over

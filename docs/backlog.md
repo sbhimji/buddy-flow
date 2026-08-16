@@ -32,6 +32,51 @@ trader's; take it to him when this is picked up.
 earnings = per-ticker), consumed by the profile builder and stamped into the nightly
 ledger; then remove the trading-days-inferred-from-data shortcut in 2.1.
 
+## Baseline estimator reevaluation — median/MAD choice, σ-floor fraction, log-scale z (calibration refinement)
+
+**Logged:** 2026-08-15 (2.2 close discussion). **Lands in:** 2.1/2.2 as a calibration
+refinement, evaluated in the 3.0 developer view on replayed sessions; the σ-floor
+fraction half tunes at the nightly ledger review (6.5). Not a v1 blocker — everything
+here is observable in replay and cheap to flip.
+
+**Decision being kept for now:** median/MAD baselines (D6) with the 2.2 σ guard
+(`σ_used = max(σ, floor)`, floor = `-sigma-floor-frac` × universe median σ per minute
+per family, default 0.25). The 0.25 is a starting guess at how much extra skepticism
+thin names deserve, not a data-derived number — reevaluate once ledger evidence shows
+whether floored names produce useful or noisy flags. The rejected alternative
+(fall back to mean/stddev when MAD = 0) stays rejected: it switches to the
+outlier-dominated estimator exactly on the samples that trip it, still divides by zero
+on all-zero samples, and breaks cross-ticker z comparability.
+
+**Three recorded caveats on median itself, to test rather than re-argue:**
+
+1. **Median is "wasteful" on clean data.** When there are no outliers, the median of
+   20 samples is a noisier estimate of the center than the mean of the same 20 —
+   we're paying a bit of statistical efficiency as an insurance premium. With
+   fat-tailed market data the insurance is worth far more than the premium, but it's
+   a real trade.
+
+2. **It doesn't fix trends — nothing in a 20-day lookback does.** If a basket's
+   volume has been steadily climbing for a month (a theme catching fire), both
+   median and mean lag reality and today reads "abnormally high" against a stale
+   baseline. That's arguably a feature (a sustained trend *is* unusual flow) — just
+   don't credit median with solving it.
+
+3. **Volume data is lopsided, and median makes that visible.** Dollar volume can
+   spike 10× above typical but can't go 10× below (floor at zero) — the distribution
+   is skewed right. Deviations above the median are systematically larger than
+   deviations below it, so z-scores read hot more easily than cold. The standard
+   remedy, worth testing in the 3.0 developer view rather than deciding now: compute
+   the z on the **logarithm** of volume-like quantities, making "10× the usual" and
+   "1/10th the usual" symmetric distances. FlowShare (a bounded ratio) needs this
+   less; raw volume and RVOL-adjacent series benefit most.
+
+**When picked up:** side-by-side in the 3.0 dev view on replayed sessions — median/MAD
+vs mean/stddev vs log-space z on the same minutes; count how often the σ floor engages
+and on which names; check hot/cold z asymmetry empirically. Estimator changes touch
+stored profile semantics (2.1) and the floor file (2.2), so any switch re-runs the
+2.1/2.2 acceptance criteria on the recorded corpus.
+
 ## Trader's "Layers" spec reconciliation (deferred from story 0.5, needs trader)
 
 **Logged:** 2026-08-12. **Was:** DEV-PLAN story 0.5 [A9]; removed so Phase 0 can close.

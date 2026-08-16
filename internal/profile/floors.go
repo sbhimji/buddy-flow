@@ -24,11 +24,15 @@ import (
 // FloorsFile is the floors filename inside a profile dir.
 const FloorsFile = "_floors.csv"
 
-// FloorRow is one ET minute-of-day's σ floors.
+// FloorRow is one ET minute-of-day's σ floors. FlowShare is the 3.1 family:
+// frac × median across baskets of σ_share (see FlowShareFloors); the two
+// volume families come from ComputeFloors.
 type FloorRow struct {
-	MinuteOfDay       int
-	SigmaFloorShares  float64
-	SigmaFloorDollars float64
+	MinuteOfDay         int
+	SigmaFloorShares    float64
+	SigmaFloorDollars   float64
+	SigmaFloorFlowShare float64
+	SigmaFloorCumShare  float64
 }
 
 // Floors is the full session's floor table.
@@ -79,7 +83,7 @@ func ComputeFloors(profiles []Profile, frac float64) (*Floors, error) {
 	return fl, nil
 }
 
-var floorsHeader = []string{"minute_of_day", "sigma_floor_shares", "sigma_floor_dollars"}
+var floorsHeader = []string{"minute_of_day", "sigma_floor_shares", "sigma_floor_dollars", "sigma_floor_flowshare", "sigma_floor_cumshare"}
 
 // WriteFloors persists the floor table as <dir>/_floors.csv, atomically,
 // deterministically. The leading comment line records the fraction and the
@@ -99,7 +103,7 @@ func WriteFloors(dir string, fl *Floors, frac float64, inputs string) error {
 	fmt.Fprintf(w, "# sigma floors (mini-spec 2.2): sigma_floor_frac=%s; built from %s\n", fnum(frac), inputs)
 	fmt.Fprintln(w, strings.Join(floorsHeader, ","))
 	for _, r := range fl.Rows {
-		fmt.Fprintf(w, "%d,%s,%s\n", r.MinuteOfDay, fnum(r.SigmaFloorShares), fnum(r.SigmaFloorDollars))
+		fmt.Fprintf(w, "%d,%s,%s,%s,%s\n", r.MinuteOfDay, fnum(r.SigmaFloorShares), fnum(r.SigmaFloorDollars), fnum(r.SigmaFloorFlowShare), fnum(r.SigmaFloorCumShare))
 	}
 	if err := w.Flush(); err != nil {
 		f.Close()
@@ -167,9 +171,11 @@ func ReadFloors(dir string) (*Floors, error) {
 			return v
 		}
 		r := FloorRow{
-			MinuteOfDay:       pI("minute_of_day"),
-			SigmaFloorShares:  pF("sigma_floor_shares"),
-			SigmaFloorDollars: pF("sigma_floor_dollars"),
+			MinuteOfDay:         pI("minute_of_day"),
+			SigmaFloorShares:    pF("sigma_floor_shares"),
+			SigmaFloorDollars:   pF("sigma_floor_dollars"),
+			SigmaFloorFlowShare: pF("sigma_floor_flowshare"),
+			SigmaFloorCumShare:  pF("sigma_floor_cumshare"),
 		}
 		if perr != nil {
 			return nil, fmt.Errorf("%s:%d: %w", path, line, perr)

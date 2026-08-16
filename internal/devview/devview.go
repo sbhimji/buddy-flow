@@ -33,19 +33,20 @@ type BasketRow struct {
 
 // RowCtx is what a column's cell function sees: the row, the render second,
 // and the view for store/profile reads. Shared window/baseline reads are
-// memoized per row, so columns that use the same quantity (e.g. $m-1 and
-// rvol) see ONE store read — a row is internally consistent even while the
+// memoized per row, so columns that use the same quantity (e.g.
+// last_minute_dollar_vol and relative_vol) see ONE store read — a row is
+// internally consistent even while the
 // pipeline is writing, and renders don't rescan windows per column.
 type RowCtx struct {
 	View   *View
 	Basket *BasketRow
 	AtSec  int64 // epoch second the table is rendered "as of"
 
-	havePrev     bool
-	prevCounted  float64
-	haveBase     bool
-	baseDollars  float64
-	baseInProf   bool
+	havePrev    bool
+	prevCounted float64
+	haveBase    bool
+	baseDollars float64
+	baseInProf  bool
 }
 
 // minuteStart returns the epoch second the render second's minute began.
@@ -80,6 +81,9 @@ type Column struct {
 	Name  string
 	Width int
 	Cell  func(rc *RowCtx) string
+	// Legend, when set, is appended to the clock-line legend — registered
+	// metrics document which minute they describe without renderer edits.
+	Legend string
 }
 
 // View wraps the bucket store as the pipeline observer and renders the
@@ -188,35 +192,35 @@ func (v *View) baselineDollars(b *BasketRow, minuteOfDay int) (float64, bool) {
 
 const gap = "·"
 
-// defaultColumns is the day-one set (mini-spec D4). RVOL computes on the
-// last COMPLETED minute — a partial minute against a full-minute baseline
-// reads falsely low — and reuses the SAME memoized $m-1 and base reads its
-// neighbor columns display, so the printed ratio always reconciles with the
-// printed operands. No z column: basket σ cannot be summed from member σs;
-// FlowShareZ registers here when 3.1 exists.
+// defaultColumns is the day-one set (mini-spec D4). relative_vol computes on
+// the last COMPLETED minute — a partial minute against a full-minute baseline
+// reads falsely low — and reuses the SAME memoized last-minute and baseline
+// reads its neighbor columns display, so the printed ratio always reconciles
+// with the printed operands. No z column: basket σ cannot be summed from
+// member σs; FlowShareZ registers here when 3.1 exists.
 func defaultColumns() []Column {
 	return []Column{
 		{Name: "N", Width: 3, Cell: func(rc *RowCtx) string {
 			return fmt.Sprintf("%d", len(rc.Basket.States))
 		}},
-		{Name: "$last", Width: 8, Cell: func(rc *RowCtx) string {
+		{Name: "last_minute_dollar_vol", Width: 22, Cell: func(rc *RowCtx) string {
 			return fmtDollars(rc.PrevMinuteCounted())
 		}},
-		{Name: "base", Width: 8, Cell: func(rc *RowCtx) string {
+		{Name: "20d_dollar_vol", Width: 14, Cell: func(rc *RowCtx) string {
 			base, ok := rc.PrevMinuteBaseline()
 			if !ok {
 				return gap
 			}
 			return fmtDollars(base)
 		}},
-		{Name: "rvol", Width: 6, Cell: func(rc *RowCtx) string {
+		{Name: "relative_vol", Width: 12, Cell: func(rc *RowCtx) string {
 			base, ok := rc.PrevMinuteBaseline()
 			if !ok || base == 0 {
 				return gap
 			}
 			return fmt.Sprintf("%.2f", rc.PrevMinuteCounted()/base)
 		}},
-		{Name: "$now", Width: 8, Cell: func(rc *RowCtx) string {
+		{Name: "current_minute_dollar_vol", Width: 25, Cell: func(rc *RowCtx) string {
 			return fmtDollars(rc.View.countedDollars(rc.Basket, rc.minuteStart(), rc.AtSec+1))
 		}},
 	}
@@ -254,11 +258,17 @@ func fmtDollars(v float64) string {
 func (v *View) Render(atSec int64) string {
 	var sb strings.Builder
 	et := time.Unix(atSec, 0).In(session.ET())
-	// Name the minutes on screen: $last/base/rvol all describe the last
-	// COMPLETED minute; only $now is the in-progress one.
+	// Name the minutes on screen: last_minute/20d/relative_vol all describe
+	// the last COMPLETED minute; only current_minute is the in-progress one.
 	lastMin := time.Unix(session.MinuteStart(atSec*1e9)-60, 0).In(session.ET())
-	fmt.Fprintf(&sb, "%s ET  %s   $last/base/rvol = %s minute (counted $vol vs its 20d matched-minute baseline); $now = %s so far\n",
+	fmt.Fprintf(&sb, "%s ET  %s   last_minute/20d/relative_vol = %s minute (counted $vol vs its 20d matched-minute baseline); current_minute = %s so far",
 		et.Format("15:04:05"), et.Format("2006-01-02"), lastMin.Format("15:04"), et.Format("15:04"))
+	for _, c := range v.columns {
+		if c.Legend != "" {
+			sb.WriteString("; " + c.Legend)
+		}
+	}
+	sb.WriteByte('\n')
 
 	nameW := len("BASKET")
 	for i := range v.baskets {

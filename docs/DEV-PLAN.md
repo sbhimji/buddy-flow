@@ -245,3 +245,5 @@ Accepted stakeholder amendments, numbered per the review discussion (only the it
 | A9 | Obtain and reconcile the trader's "Layers"-numbered spec (Layer 6 bond gate, Layer 8 leadership-divergence detector — latter undocumented here) | backlog (was 0.5, deferred 2026-08-12) |
 
 Note: A6 presupposes multi-basket membership (e.g., NVDA in both semis_compute and proof_tier), which effectively answers **D3 = multi allowed** — 0.1's [F5a] caveat (shares no longer sum to 100% across baskets) therefore applies and must be documented.
+
+**Amendment 2026-08-16 (3.1 mini-spec D1) — FlowShare denominator.** §2.1's "entire tracked universe" is amended to the **union of distinct basket members only** (164 symbols, each counted once); benchmarks (SPY/QQQ/TLT/BIL/sector ETFs) are excluded from the denominator. Rationale: an index-ETF volume burst must not depress every basket's share simultaneously — the rotation read is between baskets. Decided by the product owner in the 3.1 spec discussion; surface to the trader with the first FlowShare numbers. Details and caveats: `docs/mini-specs/3.1-flowshare.md` D1.

@@ -116,24 +116,57 @@ func main() {
 	}
 	fmt.Printf("wrote %d profiles -> %s\n", len(profiles), *outDir)
 
-	// Floors build in the same run as every profile build (2.2 D2).
+	// Share profiles build in the same run (3.1 D2): per basket per minute,
+	// each day's FlowShare first, then median/MAD over days.
+	baskets, err := universe.LoadBaskets(*basketsPath)
+	if err != nil {
+		fatal(err)
+	}
+	shares, skipped, err := profile.BuildShares(baskets, daysIn)
+	if err != nil {
+		fatal(err)
+	}
+	for _, s := range skipped {
+		fmt.Printf("!! share profiles: day %s skipped for ALL baskets — uncovered members (zero prints all session): %v\n", s.Date, s.Uncovered)
+	}
+	inputs := fmt.Sprintf("%d symbols x %d days (%s .. %s)",
+		len(syms), len(daysIn), daysIn[0].Date, daysIn[len(daysIn)-1].Date)
+	if err := profile.WriteShares(*outDir, shares, inputs); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("wrote %d share profiles -> %s\n", len(shares), filepath.Join(*outDir, profile.SharesDir))
+
+	// Floors build in the same run as every profile build (2.2 D2; 3.1 D4
+	// adds the flowshare family).
 	floors, err := profile.ComputeFloors(profiles, *floorFrac)
 	if err != nil {
 		fatal(err)
 	}
-	inputs := fmt.Sprintf("%d symbols x %d days (%s .. %s)",
-		len(syms), len(daysIn), daysIn[0].Date, daysIn[len(daysIn)-1].Date)
+	shareFloors, err := profile.FlowShareFloors(shares, *floorFrac)
+	if err != nil {
+		fatal(err)
+	}
+	cumFloors, err := profile.CumShareFloors(shares, *floorFrac)
+	if err != nil {
+		fatal(err)
+	}
+	for i := range floors.Rows {
+		floors.Rows[i].SigmaFloorFlowShare = shareFloors[i]
+		floors.Rows[i].SigmaFloorCumShare = cumFloors[i]
+	}
 	if err := profile.WriteFloors(*outDir, floors, *floorFrac, inputs); err != nil {
 		fatal(err)
 	}
 	fmt.Printf("wrote floors -> %s\n", filepath.Join(*outDir, profile.FloorsFile))
 	// Spot sanity (2.2 done-when #4; reported, not gated): open-minute
 	// floors should be visibly larger than midday — volume σ scales with
-	// volume.
+	// volume. FlowShare floors have no such physics (shares are ratios);
+	// printed for eyeballing only.
 	open, _ := floors.Minute(9*60 + 35)
 	mid, _ := floors.Minute(13 * 60)
-	fmt.Printf("σ floors (frac=%v): shares 09:35=%.4g 13:00=%.4g | dollars 09:35=%.4g 13:00=%.4g (expect 09:35 larger)\n",
-		*floorFrac, open.SigmaFloorShares, mid.SigmaFloorShares, open.SigmaFloorDollars, mid.SigmaFloorDollars)
+	fmt.Printf("σ floors (frac=%v): shares 09:35=%.4g 13:00=%.4g | dollars 09:35=%.4g 13:00=%.4g (expect 09:35 larger) | flowshare 09:35=%.4g 13:00=%.4g | cumshare 09:35=%.4g 13:00=%.4g (expect narrowing)\n",
+		*floorFrac, open.SigmaFloorShares, mid.SigmaFloorShares, open.SigmaFloorDollars, mid.SigmaFloorDollars,
+		open.SigmaFloorFlowShare, mid.SigmaFloorFlowShare, open.SigmaFloorCumShare, mid.SigmaFloorCumShare)
 }
 
 // discoverDays lists bucket files, prefers full-session files over

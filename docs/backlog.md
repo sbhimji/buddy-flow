@@ -193,7 +193,14 @@ silently changes what the replayed table shows. Tolerable while the PM isn't edi
 yet and the view is a dev instrument; the fix is the same effective-date mechanism, and
 the config schema (trader-owned) still carries no dates to consume — that schema ask
 rides with the `equity: false` proposal below. (`LoadBaskets` de-duplicates members as
-of the same review; full validation still pends here.)
+of the same review; full validation still pends here.) Also recorded from the 3.1
+spec review (2026-08-16): **coverage-drift bias** — a member added to the universe
+later has no rows in older bucket files, and zero-materialization makes "absent from
+capture" read as "didn't trade", so per-ticker volume profiles (`Row.Days` is
+unconditional) and any basket-day sample silently bias low for pre-addition days.
+3.1's share profiles mitigate with an all-session-silent skip rule (mini-spec D2b);
+the per-ticker volume profiles have no equivalent. Effective-date membership is the
+real fix for both.
 
 **Schema proposal for the trader:** the engine currently excludes non-equity symbols by
 matching the trader-owned group *name* `bond_gate_futures` — a string the trader may

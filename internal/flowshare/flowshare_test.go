@@ -161,6 +161,61 @@ func TestColumns(t *testing.T) {
 	}
 }
 
+// TestTraderColumns: the trader-view-v0 set — column order, the |z| ≥ 2
+// highlight (green positive), and the rank function.
+func TestTraderColumns(t *testing.T) {
+	store, table, start := synthStore(t)
+	prof := &profile.ShareProfile{Basket: "x", Rows: make([]profile.ShareRow, session.MinutesPerSession)}
+	floors := &profile.Floors{Rows: make([]profile.FloorRow, session.MinutesPerSession)}
+	for i := range prof.Rows {
+		// Cum baseline 0.1 with σ 0, floor 0.125: cum share 0.4 → z = +2.4,
+		// beyond SignificantZ → green highlight.
+		prof.Rows[i] = profile.ShareRow{MinuteOfDay: session.OpenMinute + i,
+			CumDays: 20, MedianCumShare: 0.1, SigmaCumShare: 0}
+		floors.Rows[i] = profile.FloorRow{MinuteOfDay: session.OpenMinute + i, SigmaFloorCumShare: 0.125}
+	}
+	cols, rank := TraderColumns(store, states(table, "A", "B", "C"), map[string]*profile.ShareProfile{"x": prof}, floors)
+	wantOrder := []string{"cum_share", "cum_share_typ", "cum_share_z", "relative_vol", "concentration"}
+	for i, w := range wantOrder {
+		if cols[i].Name != w {
+			t.Fatalf("column %d = %s, want %s", i, cols[i].Name, w)
+		}
+	}
+	rc := &devview.RowCtx{Basket: &devview.BasketRow{Name: "x", States: states(table, "A", "B")}, AtSec: start + 65}
+	zc := cols[2]
+	if got := zc.Cell(rc); got != "+2.4" {
+		t.Errorf("cum_share_z = %q, want +2.4", got)
+	}
+	if got := zc.Style(rc); got != sgrGreen {
+		t.Errorf("style = %q, want green (z beyond +%v)", got, SignificantZ)
+	}
+	// Same-path float expectation via float64 VARIABLES — a constant
+	// expression would fold at infinite precision and miss the runtime
+	// rounding zguard actually performs.
+	share, med, floor := 400.0/1000.0, 0.1, 0.125
+	if r, ok := rank(rc); !ok || r != (share-med)/floor {
+		t.Errorf("rank = %v, %v; want %v, true", r, ok, (share-med)/floor)
+	}
+	// Unknown basket: no z → no style, rank gap (sorts last).
+	rcU := &devview.RowCtx{Basket: &devview.BasketRow{Name: "nope", States: states(table, "D")}, AtSec: start + 65}
+	if got := zc.Style(rcU); got != "" {
+		t.Errorf("gap style = %q, want none", got)
+	}
+	if _, ok := rank(rcU); ok {
+		t.Error("gap rank reported ok")
+	}
+	// Below-threshold z: value renders, no highlight. Median 0.25 → z 1.2.
+	for i := range prof.Rows {
+		prof.Rows[i].MedianCumShare = 0.25
+	}
+	if got := zc.Cell(rc); got != "+1.2" {
+		t.Errorf("cum_share_z = %q, want +1.2", got)
+	}
+	if got := zc.Style(rc); got != "" {
+		t.Errorf("sub-threshold style = %q, want none", got)
+	}
+}
+
 // TestCumShareZ covers the D7 z's null paths directly.
 func TestCumShareZ(t *testing.T) {
 	prof := &profile.ShareProfile{Basket: "x", Rows: make([]profile.ShareRow, session.MinutesPerSession)}

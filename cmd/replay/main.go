@@ -26,7 +26,6 @@ import (
 	"buddy-flow/internal/feed"
 	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
-	"buddy-flow/internal/profile"
 	"buddy-flow/internal/session"
 	"buddy-flow/internal/universe"
 )
@@ -47,6 +46,7 @@ func main() {
 		bucketsPath = flag.String("buckets", "", "write the 1.4 bucket store CSV here after the run; empty = no buckets")
 		view        = flag.Bool("view", false, "3.0 developer view: auto-refreshing basket table (requires -capture; pace with -speed)")
 		profilesDir = flag.String("profiles", "data/profiles", "profile directory for -view baselines")
+		viewMode    = flag.String("view-mode", "dev", "-view column set: dev (all metrics, name order) or trader (trader-view-v0: cum-share story, cum-z sort, significance highlight)")
 		viewAt      = flag.String("view-at", "", "also render the -view table as of this ET HH:MM:SS after the replay (spot checks; buckets are event-time keyed, so any past second is exact)")
 	)
 	flag.Parse()
@@ -63,6 +63,10 @@ func main() {
 	// time" only exists on capture replay (mini-spec 3.0 D2).
 	if *view && *capturePath == "" {
 		fmt.Fprintln(os.Stderr, "-view applies only to -capture replay")
+		os.Exit(2)
+	}
+	if *viewMode != "dev" && *viewMode != "trader" {
+		fmt.Fprintln(os.Stderr, "-view-mode must be dev or trader")
 		os.Exit(2)
 	}
 	if *viewAt != "" {
@@ -146,37 +150,24 @@ func main() {
 		// 3.1 columns: share profiles + floors are hard requirements when
 		// viewing — a missing baseline must fail loudly, not render fake
 		// zeros (same posture as devview.New on per-ticker profiles).
-		union := map[string]bool{}
-		for _, b := range bks {
-			for _, m := range b.Members {
-				union[m] = true
-			}
+		unionStates, err := flowshare.Union(bks, table)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
 		}
-		unionSyms := make([]string, 0, len(union))
-		for sym := range union {
-			unionSyms = append(unionSyms, sym)
-		}
-		sort.Strings(unionSyms)
-		unionStates := make([]*ingest.SymbolState, 0, len(unionSyms))
-		for _, sym := range unionSyms {
-			unionStates = append(unionStates, table.Lookup(sym))
-		}
-		shares := map[string]*profile.ShareProfile{}
-		for _, b := range bks {
-			sp, err := profile.ReadShares(*profilesDir, b.Name, b.Members)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "%v (rebuild with cmd/profiles?)\n", err)
-				os.Exit(1)
-			}
-			shares[b.Name] = sp
-		}
-		floors, err := profile.ReadFloors(*profilesDir)
+		shares, floors, err := flowshare.LoadBaselines(*profilesDir, bks)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%v (rebuild with cmd/profiles?)\n", err)
 			os.Exit(1)
 		}
-		for _, c := range flowshare.Columns(store, unionStates, shares, floors) {
-			dv.Register(c)
+		if *viewMode == "trader" {
+			cols, rank := flowshare.TraderColumns(store, unionStates, shares, floors)
+			dv.SetColumns(cols)
+			dv.SetRank(rank)
+		} else {
+			for _, c := range flowshare.Columns(store, unionStates, shares, floors) {
+				dv.Register(c)
+			}
 		}
 	}
 	switch { // before Run starts (pipeline contract)

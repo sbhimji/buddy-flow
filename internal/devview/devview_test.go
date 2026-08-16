@@ -144,6 +144,45 @@ func TestRegisterColumn(t *testing.T) {
 	}
 }
 
+// TestRankAndStyle covers the trader-view seams: SetColumns replaces the
+// set, SetRank orders rows (descending, gaps last, name tiebreak), and
+// Style wraps the PADDED cell in ANSI so alignment survives.
+func TestRankAndStyle(t *testing.T) {
+	v, atSec := newTestView(t)
+	v.SetColumns([]Column{{
+		Name: "m", Width: 4,
+		Cell: func(rc *RowCtx) string { return rc.Basket.Name[:1] },
+		Style: func(rc *RowCtx) string {
+			if rc.Basket.Name == "quiet" {
+				return "\x1b[1;31m"
+			}
+			return ""
+		},
+	}})
+	// quiet ranks above chips by key; chips has no defined key → last.
+	v.SetRank(func(rc *RowCtx) (float64, bool) {
+		if rc.Basket.Name == "quiet" {
+			return 1, true
+		}
+		return 0, false
+	})
+	out := v.Render(atSec)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if !strings.HasPrefix(lines[2], "quiet") || !strings.HasPrefix(lines[3], "chips") {
+		t.Fatalf("rank order wrong:\n%s", out)
+	}
+	// Styled cell: ANSI wraps the padded "   q", so columns stay aligned.
+	if want := "  \x1b[1;31m   q\x1b[0m"; !strings.Contains(lines[2], want) {
+		t.Errorf("styled cell = %q, want to contain %q", lines[2], want)
+	}
+	if strings.Contains(lines[3], "\x1b[") {
+		t.Errorf("unstyled row carries ANSI: %q", lines[3])
+	}
+	if out != v.Render(atSec) {
+		t.Error("styled+ranked render not deterministic")
+	}
+}
+
 // TestNewRejectsMissingProfile: a member without a profile must fail loudly
 // at construction, not render fake-zero baselines.
 func TestNewRejectsMissingProfile(t *testing.T) {

@@ -84,16 +84,24 @@ type Column struct {
 	// Legend, when set, is appended to the clock-line legend — registered
 	// metrics document which minute they describe without renderer edits.
 	Legend string
+	// Style, when set, returns an ANSI SGR prefix (or "") for the cell.
+	// The renderer wraps the ALREADY-PADDED cell (ANSI bytes are invisible
+	// to width, so styling after padding is what keeps columns aligned).
+	// Colored bytes are still deterministic bytes — Render stays a pure
+	// function of (store state, second).
+	Style func(rc *RowCtx) string
 }
 
 // View wraps the bucket store as the pipeline observer and renders the
 // basket × column table on demand.
 type View struct {
-	store    *bucket.Store
-	baskets  []BasketRow
-	profiles map[string]*profile.Profile
-	columns  []Column
-	clockNs  atomic.Int64 // max SIP ts observed; the replayed session clock
+	store      *bucket.Store
+	baskets    []BasketRow
+	profiles   map[string]*profile.Profile
+	columns    []Column
+	rank       func(rc *RowCtx) (float64, bool) // optional row order (SetRank)
+	baseLegend bool                             // clock line carries the default columns' legend
+	clockNs    atomic.Int64                     // max SIP ts observed; the replayed session clock
 }
 
 // New resolves baskets against the symbol table and loads every member's
@@ -121,12 +129,23 @@ func New(store *bucket.Store, table *ingest.Table, baskets []universe.Basket, pr
 		v.baskets = append(v.baskets, row)
 	}
 	sort.Slice(v.baskets, func(i, j int) bool { return v.baskets[i].Name < v.baskets[j].Name })
-	v.columns = defaultColumns()
+	v.columns, v.baseLegend = defaultColumns(), true
 	return v, nil
 }
 
 // Register appends a metric column (the Phase 3 extension point).
 func (v *View) Register(c Column) { v.columns = append(v.columns, c) }
+
+// SetColumns replaces the column set entirely — the trader view composes
+// its own set instead of extending the dev defaults. The default columns'
+// base legend goes with them; the new columns document themselves via
+// Column.Legend.
+func (v *View) SetColumns(cols []Column) { v.columns, v.baseLegend = cols, false }
+
+// SetRank installs a row-ordering key: rows sort by descending key each
+// render; rows with ok=false (no defined key — e.g. a gapped z) sort last;
+// ties break by basket name. Nil (the default) keeps name order.
+func (v *View) SetRank(rank func(rc *RowCtx) (float64, bool)) { v.rank = rank }
 
 // ObserveTrade delegates to the store and advances the session clock.
 func (v *View) ObserveTrade(t *ingest.Trade) {
@@ -258,11 +277,18 @@ func fmtDollars(v float64) string {
 func (v *View) Render(atSec int64) string {
 	var sb strings.Builder
 	et := time.Unix(atSec, 0).In(session.ET())
-	// Name the minutes on screen: last_minute/20d/relative_vol all describe
-	// the last COMPLETED minute; only current_minute is the in-progress one.
+	// Name the minutes on screen. The base legend describes the DEFAULT
+	// column set and is cleared by SetColumns — a composed view (trader)
+	// must not inherit a legend for columns it doesn't render; its columns
+	// carry their own Legend entries.
 	lastMin := time.Unix(session.MinuteStart(atSec*1e9)-60, 0).In(session.ET())
-	fmt.Fprintf(&sb, "%s ET  %s   last_minute/20d/relative_vol = %s minute (counted $vol vs its 20d matched-minute baseline); current_minute = %s so far",
-		et.Format("15:04:05"), et.Format("2006-01-02"), lastMin.Format("15:04"), et.Format("15:04"))
+	fmt.Fprintf(&sb, "%s ET  %s  ", et.Format("15:04:05"), et.Format("2006-01-02"))
+	if v.baseLegend {
+		fmt.Fprintf(&sb, " last_minute/20d/relative_vol = %s minute (counted $vol vs its 20d matched-minute baseline); current_minute = %s so far",
+			lastMin.Format("15:04"), et.Format("15:04"))
+	} else {
+		fmt.Fprintf(&sb, " completed minute = %s; in-progress = %s", lastMin.Format("15:04"), et.Format("15:04"))
+	}
 	for _, c := range v.columns {
 		if c.Legend != "" {
 			sb.WriteString("; " + c.Legend)
@@ -281,12 +307,47 @@ func (v *View) Render(atSec int64) string {
 		fmt.Fprintf(&sb, "  %*s", c.Width, c.Name)
 	}
 	sb.WriteByte('\n')
-	for i := range v.baskets {
+	order := make([]int, len(v.baskets))
+	for i := range order {
+		order[i] = i
+	}
+	if v.rank != nil {
+		// Row order recomputes every render: baskets migrate as the story
+		// develops. Keys are computed once per row (fresh RowCtx per rank
+		// call would double store reads — reuse one per row is fine since
+		// rank consumes only its own metric).
+		type key struct {
+			val float64
+			ok  bool
+		}
+		keys := make([]key, len(v.baskets))
+		for i := range v.baskets {
+			val, ok := v.rank(&RowCtx{View: v, Basket: &v.baskets[i], AtSec: atSec})
+			keys[i] = key{val, ok}
+		}
+		sort.SliceStable(order, func(a, b int) bool {
+			ka, kb := keys[order[a]], keys[order[b]]
+			if ka.ok != kb.ok {
+				return ka.ok // defined keys before gaps
+			}
+			if ka.ok && ka.val != kb.val {
+				return ka.val > kb.val // descending
+			}
+			return v.baskets[order[a]].Name < v.baskets[order[b]].Name
+		})
+	}
+	for _, i := range order {
 		b := &v.baskets[i]
 		rc := &RowCtx{View: v, Basket: b, AtSec: atSec} // one ctx per row: cells share memoized reads
 		fmt.Fprintf(&sb, "%-*s", nameW, b.Name)
 		for _, c := range v.columns {
-			fmt.Fprintf(&sb, "  %*s", c.Width, c.Cell(rc))
+			cell := fmt.Sprintf("%*s", c.Width, c.Cell(rc))
+			if c.Style != nil {
+				if sgr := c.Style(rc); sgr != "" {
+					cell = sgr + cell + "\x1b[0m"
+				}
+			}
+			sb.WriteString("  " + cell)
 		}
 		sb.WriteByte('\n')
 	}

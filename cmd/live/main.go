@@ -97,9 +97,10 @@ func main() {
 		if err != nil {
 			fatal(fmt.Errorf("%w (roll profiles first: go run ./cmd/profiles -days 20)", err))
 		}
-		cols, rank := flowshare.TraderColumns(store, unionStates, shares, floors)
+		cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors)
 		dv.SetColumns(cols)
 		dv.SetRank(rank)
+		dv.SetFooter(footer)
 		p.SetObserver(dv) // before Run starts (pipeline contract)
 	} else {
 		p.SetObserver(store) // before Run starts (pipeline contract)

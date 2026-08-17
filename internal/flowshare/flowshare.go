@@ -171,11 +171,15 @@ func LoadBaselines(profilesDir string, baskets []universe.Basket) (map[string]*p
 	return shares, floors, nil
 }
 
-// winSnap is one window's union snapshot: every union member's counted $vol
-// read in a single pass. All rows of a render divide by the SAME reads, so
-// (a) no basket can exceed 100% (its numerator sums a subset of the same
-// snapshot) and (b) shares across rows are mutually comparable — two
-// desynchronized passes against the live writer would guarantee neither.
+// winSnap is one window's union snapshot: every union member's $vol in one
+// print-inclusion slice, read in a single pass. All rows of a render divide
+// by the SAME reads, so (a) no basket can exceed 100% (its numerator sums a
+// subset of the same snapshot) and (b) shares across rows are mutually
+// comparable — two desynchronized passes against the live writer would
+// guarantee neither. Each snapshot instance is bound to ONE slice at its
+// call sites (memoization does not key on it): the per-minute snapshots
+// read profile.Counted, the cumulative one profile.CountedWithAuctions —
+// each side of a comparison must match its baseline's slice exactly.
 type winSnap struct {
 	fromSec, toSec int64
 	atSec          int64 // render second: memoization is per RENDER, never
@@ -186,7 +190,7 @@ type winSnap struct {
 	valid   bool
 }
 
-func (w *winSnap) get(store *bucket.Store, union []*ingest.SymbolState, fromSec, toSec, atSec int64) {
+func (w *winSnap) get(store *bucket.Store, union []*ingest.SymbolState, slice func(bucket.Bucket) (shares, dollars float64), fromSec, toSec, atSec int64) {
 	if w.valid && w.fromSec == fromSec && w.toSec == toSec && w.atSec == atSec {
 		return
 	}
@@ -196,7 +200,7 @@ func (w *winSnap) get(store *bucket.Store, union []*ingest.SymbolState, fromSec,
 	}
 	for _, st := range union {
 		b := store.Window(st, fromSec, toSec)
-		_, d := profile.Counted(b)
+		_, d := slice(b)
 		w.dollars[st] = d
 		w.uni += d
 	}
@@ -236,13 +240,16 @@ type cells struct {
 
 func (c *cells) prevShare(rc *devview.RowCtx) (float64, bool) {
 	cur := session.MinuteStart(rc.AtSec * 1e9)
-	c.prevWin.get(c.store, c.union, cur-60, cur, rc.AtSec)
+	c.prevWin.get(c.store, c.union, profile.Counted, cur-60, cur, rc.AtSec)
 	return c.prevWin.share(rc.Basket.States)
 }
 
 // cumWindow is the D7 window: open through the end of the last completed
 // minute, clamped at the close so post-close renders show the whole-day
-// share. key is the matched-bucket minute for the baseline. ok=false
+// share. The clamp also keeps the closing cross out — its prints carry
+// 16:00:00+ SIP timestamps, past the [open, close) window (deferred
+// deliberately; docs/backlog.md "closing-cross inclusion in cumulative
+// share"). key is the matched-bucket minute for the baseline. ok=false
 // before the first completed session minute.
 func (c *cells) cumWindow(atSec int64) (fromSec, toSec int64, key int, ok bool) {
 	date := session.Date(atSec * 1e9)
@@ -261,12 +268,15 @@ func (c *cells) cumWindow(atSec int64) (fromSec, toSec int64, key int, ok bool) 
 	return openSec, end, session.MinuteOfDay((end - 60) * 1e9), true
 }
 
+// cumShare reads the auction-inclusive slice (D7 amendment): the opening
+// auction belongs in the since-open story, and its baseline (BuildShares)
+// accumulates the identical slice — the operands must reconcile.
 func (c *cells) cumShare(rc *devview.RowCtx) (float64, int, bool) {
 	from, to, key, ok := c.cumWindow(rc.AtSec)
 	if !ok {
 		return 0, 0, false
 	}
-	c.cumWin.get(c.store, c.union, from, to, rc.AtSec)
+	c.cumWin.get(c.store, c.union, profile.CountedWithAuctions, from, to, rc.AtSec)
 	s, ok := c.cumWin.share(rc.Basket.States)
 	return s, key, ok
 }
@@ -283,7 +293,7 @@ func (c *cells) cumZ(rc *devview.RowCtx) (float64, bool) {
 
 func (c *cells) cumShareCol() devview.Column {
 	return devview.Column{Name: "cum_share", Width: 9,
-		Legend: "cum_share* = since open through completed minute",
+		Legend: "cum_share* = since open through completed minute, incl. auction crosses (per-minute columns exclude them)",
 		Cell: func(rc *devview.RowCtx) string {
 			s, _, ok := c.cumShare(rc)
 			if !ok {
@@ -367,7 +377,7 @@ func Columns(store *bucket.Store, union []*ingest.SymbolState, shares map[string
 			Legend: "flow_share = in-progress minute; flow_share_z/concentration = completed minute",
 			Cell: func(rc *devview.RowCtx) string {
 				cur := session.MinuteStart(rc.AtSec * 1e9)
-				c.curWin.get(c.store, c.union, cur, rc.AtSec+1, rc.AtSec)
+				c.curWin.get(c.store, c.union, profile.Counted, cur, rc.AtSec+1, rc.AtSec)
 				s, ok := c.curWin.share(rc.Basket.States)
 				if !ok {
 					return gap
@@ -394,14 +404,30 @@ func Columns(store *bucket.Store, union []*ingest.SymbolState, shares map[string
 	}
 }
 
+// TraderFooter is the trader view's plain-English legend: a fixed block
+// below the table defining every rendered column for a trader with no
+// context. Statements of measurement only — never buy/sell or
+// recommendation language (scope law). It travels with the trader column
+// set (TraderColumns returns it; the dev view gets no footer) and is a
+// constant, so Render stays a pure function of (store state, second).
+const TraderFooter = `cum_share     = % of all dollars traded across our tracked universe since the open that went through this basket (includes opening auction)
+cum_share_typ = what that % typically is by this time of day, median of the last 20 sessions
+cum_share_z   = how unusual today is vs those 20 days, in σ — ±1 ordinary, ±2 notable (highlighted), ±3 rare
+relative_vol  = last full minute's dollars vs the typical for that exact minute — 1.0 = normal pace
+concentration = the single stock carrying the largest share of this basket's dollars last minute
+·             = no basis for comparison — never a zero
+`
+
 // TraderColumns composes the trader-view-v0 set: the since-open story,
 // one instantaneous pulse (relative_vol), and concentration — sorted by
 // the returned rank (cum z descending, gaps last). No per-minute share z:
-// it flickers; the cumulative z carries the story.
-func TraderColumns(store *bucket.Store, union []*ingest.SymbolState, shares map[string]*profile.ShareProfile, floors *profile.Floors) (cols []devview.Column, rank func(rc *devview.RowCtx) (float64, bool)) {
+// it flickers; the cumulative z carries the story. The returned footer
+// (TraderFooter) defines every column in plain English; the clock-line
+// legends the columns would otherwise carry are dropped — the footer
+// explains them, the clock line just names the minutes.
+func TraderColumns(store *bucket.Store, union []*ingest.SymbolState, shares map[string]*profile.ShareProfile, floors *profile.Floors) (cols []devview.Column, rank func(rc *devview.RowCtx) (float64, bool), footer string) {
 	c := &cells{store: store, union: union, shares: shares, floors: floors}
 	relVol := devview.Column{Name: "relative_vol", Width: 12,
-		Legend: "relative_vol = completed minute's $vol vs its 20d matched-minute baseline",
 		Cell: func(rc *devview.RowCtx) string {
 			base, ok := rc.PrevMinuteBaseline()
 			if !ok || base == 0 {
@@ -410,12 +436,12 @@ func TraderColumns(store *bucket.Store, union []*ingest.SymbolState, shares map[
 			return fmt.Sprintf("%.2f", rc.PrevMinuteCounted()/base)
 		}}
 	cum := c.cumShareCol()
-	cum.Legend = "cum_share* = share of tracked tape since open, through completed minute; bold = |z| ≥ 2"
+	cum.Legend = ""
 	return []devview.Column{
 		cum,
 		c.cumShareTypCol(),
 		c.cumShareZCol(true),
 		relVol,
 		c.concentrationCol(),
-	}, c.cumZ
+	}, c.cumZ, TraderFooter
 }

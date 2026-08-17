@@ -100,6 +100,7 @@ type View struct {
 	profiles   map[string]*profile.Profile
 	columns    []Column
 	rank       func(rc *RowCtx) (float64, bool) // optional row order (SetRank)
+	footer     string                           // optional fixed block below the table (SetFooter)
 	baseLegend bool                             // clock line carries the default columns' legend
 	clockNs    atomic.Int64                     // max SIP ts observed; the replayed session clock
 }
@@ -146,6 +147,13 @@ func (v *View) SetColumns(cols []Column) { v.columns, v.baseLegend = cols, false
 // render; rows with ok=false (no defined key — e.g. a gapped z) sort last;
 // ties break by basket name. Nil (the default) keeps name order.
 func (v *View) SetRank(rank func(rc *RowCtx) (float64, bool)) { v.rank = rank }
+
+// SetFooter installs a fixed block rendered below the table, separated by a
+// blank line — the trader view's plain-English column definitions travel
+// with its composed column set; the dev view sets none (the default, empty,
+// renders nothing). A fixed string keeps Render a pure function of
+// (store state, second).
+func (v *View) SetFooter(footer string) { v.footer = footer }
 
 // ObserveTrade delegates to the store and advances the session clock.
 func (v *View) ObserveTrade(t *ingest.Trade) {
@@ -350,6 +358,10 @@ func (v *View) Render(atSec int64) string {
 			sb.WriteString("  " + cell)
 		}
 		sb.WriteByte('\n')
+	}
+	if v.footer != "" {
+		sb.WriteByte('\n')
+		sb.WriteString(v.footer)
 	}
 	return sb.String()
 }

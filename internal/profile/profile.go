@@ -44,6 +44,22 @@ func Counted(b bucket.Bucket) (shares, dollars float64) {
 	return shares, dollars
 }
 
+// CountedWithAuctions is the auction-inclusive $vol slice: Counted plus the
+// cross classes (CROSS_OPEN, CROSS_REOPEN, CROSS_CLOSE). The D7 cumulative
+// share family computes on this slice (3.1 D7 amendment 2026-08-16):
+// integration absorbs the one-print lumpiness that keeps crosses out of
+// per-minute metrics, and on a gap-open morning the opening auction is where
+// the story starts. Like Counted, this is the ONE policy source for the
+// slice — consumers never enumerate classes themselves.
+func CountedWithAuctions(b bucket.Bucket) (shares, dollars float64) {
+	shares, dollars = Counted(b)
+	for _, c := range []classify.Class{classify.CrossOpen, classify.CrossReopen, classify.CrossClose} {
+		shares += b.Class[c].Shares
+		dollars += b.Class[c].Dollars
+	}
+	return shares, dollars
+}
+
 // Row is one profiled minute bucket.
 type Row struct {
 	MinuteOfDay   int

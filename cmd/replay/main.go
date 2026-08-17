@@ -161,9 +161,10 @@ func main() {
 			os.Exit(1)
 		}
 		if *viewMode == "trader" {
-			cols, rank := flowshare.TraderColumns(store, unionStates, shares, floors)
+			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors)
 			dv.SetColumns(cols)
 			dv.SetRank(rank)
+			dv.SetFooter(footer)
 		} else {
 			for _, c := range flowshare.Columns(store, unionStates, shares, floors) {
 				dv.Register(c)

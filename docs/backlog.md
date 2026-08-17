@@ -92,6 +92,31 @@ never heard named may exist in his mental model of the product.
 reconcile against §-numbering; capture the Layer 8 definition **before** scoping or
 building anything called leadership-divergence.
 
+## Closing-cross inclusion in cumulative share (deferred by design, 2026-08-16)
+
+**Logged:** 2026-08-16 (D7 auction-inclusive amendment, product owner discussion).
+**Lands in:** `internal/profile.BuildShares` + `internal/flowshare` cum window, if ever.
+
+**What:** the 3.1-D7 cumulative share family became auction-inclusive
+(`profile.CountedWithAuctions` — opening/reopening crosses count in the since-open
+story). The **closing cross does not**: the cum window is `[open, close)` and closing
+prints carry 16:00:00-and-later SIP timestamps (measured on 2026-08-14:
+CROSS_CLOSE prints span 16:00:00–16:05:05 ET, ~$26.3B vs ~$3.1B of opening
+crosses), so the clamp structurally excludes them on both the baseline and live
+sides — consistently, which is what matters for the z.
+
+**Decision recorded:** defer. The instrument's user moment is the morning; a
+whole-day-inclusive final share is a nice-to-have for the nightly ledger, not a
+09:30–10:30 signal.
+
+**Mechanics if picked up:** naively widening the window to `[open, close]` is wrong —
+closing prints straggle minutes past 16:00 (see the 16:05:05 span above), so
+"include the closing cross" means a window end past the last straggler or an
+explicit class-based pull, plus the same change in BuildShares' minute loop (which
+currently iterates `[open, close)` minutes only), and a baseline rebuild. Related
+open item: condition-55 `G` cross accounting (this file, above) — its
+double-count question affects how much cross $vol the ledger would attribute.
+
 ## Cancels/corrections — nightly reconciliation (LOW priority)
 
 **Logged:** 2026-08-11 (0.3). **Decision:** v1 ignores canceled/corrected trades

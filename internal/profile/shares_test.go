@@ -14,12 +14,21 @@ import (
 
 // shareDay writes a bucket file where each symbol trades `dollars[sym]` at
 // $1 in the 09:35 minute, plus (for coverage) 1 share at $1 in 09:36 for
-// every symbol listed in covered.
-func shareDay(t *testing.T, dir, date string, dollars map[string]float64, covered []string) Day {
+// every symbol listed in covered. Each symbol in `crosses` additionally
+// prints an opening cross (condition 25 → CROSS_OPEN) of that many dollars
+// in the 09:35 minute, and a $500 CLOSING cross (condition 8 → CROSS_CLOSE)
+// at 16:00:00 — the closing print sits past the [open, close) window, so if
+// the clamp ever leaked it into the cumulative, the hand-computed
+// expectations below would break.
+func shareDay(t *testing.T, dir, date string, dollars, crosses map[string]float64, covered []string) Day {
 	t.Helper()
 	table := ingest.NewTable([]string{"A", "B", "C"})
 	s := bucket.NewStore()
 	m575, err := session.BucketStart(date, 575)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeSec, err := session.BucketStart(date, session.CloseMinute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,6 +37,11 @@ func shareDay(t *testing.T, dir, date string, dollars map[string]float64, covere
 		if d > 0 {
 			s.ObserveTrade(&ingest.Trade{State: table.LookupOrCreate(sym), Price: 1, Size: d, SipTs: m575 * 1e9})
 		}
+	}
+	for sym, d := range crosses {
+		st := table.LookupOrCreate(sym)
+		s.ObserveTrade(&ingest.Trade{State: st, Price: 1, Size: d, SipTs: m575 * 1e9, Cond: [ingest.MaxConditions]int32{25}, NCond: 1})
+		s.ObserveTrade(&ingest.Trade{State: st, Price: 1, Size: 500, SipTs: closeSec * 1e9, Cond: [ingest.MaxConditions]int32{8}, NCond: 1})
 	}
 	for _, sym := range covered {
 		s.ObserveTrade(&ingest.Trade{State: table.LookupOrCreate(sym), Price: 1, Size: 1, SipTs: m576 * 1e9})
@@ -49,20 +63,25 @@ func buildTestShares(t *testing.T) ([]ShareProfile, []SkippedDay) {
 	t.Helper()
 	dir := t.TempDir()
 	all := []string{"A", "B", "C"}
+	// Every trading day also prints a $10 opening cross on A (and a closing
+	// cross, structurally excluded): per-minute samples must NOT move, the
+	// cumulative family must count it (D7 amendment).
+	crossA := map[string]float64{"A": 10}
 	days := []Day{
 		// (a, c) dollars at 09:35; b always 0 there. Day 2 doubles day 1's
 		// tape shape at other shares — co-movement is the point of shares.
-		shareDay(t, dir, "2026-08-03", map[string]float64{"A": 30, "C": 70}, all),
-		shareDay(t, dir, "2026-08-04", map[string]float64{"A": 40, "C": 60}, all),
-		shareDay(t, dir, "2026-08-05", map[string]float64{"A": 50, "C": 50}, all),
-		shareDay(t, dir, "2026-08-06", map[string]float64{"A": 60, "C": 40}, all),
-		shareDay(t, dir, "2026-08-07", map[string]float64{"A": 70, "C": 30}, all),
+		shareDay(t, dir, "2026-08-03", map[string]float64{"A": 30, "C": 70}, crossA, all),
+		shareDay(t, dir, "2026-08-04", map[string]float64{"A": 40, "C": 60}, crossA, all),
+		shareDay(t, dir, "2026-08-05", map[string]float64{"A": 50, "C": 50}, crossA, all),
+		shareDay(t, dir, "2026-08-06", map[string]float64{"A": 60, "C": 40}, crossA, all),
+		shareDay(t, dir, "2026-08-07", map[string]float64{"A": 70, "C": 30}, crossA, all),
 		// 0/0 minute: everyone silent at 09:35 (covered via 09:36) — the
-		// minute contributes NO sample, not a zero share (D3).
-		shareDay(t, dir, "2026-08-10", nil, all),
+		// minute contributes NO sample, not a zero share (D3). No crosses:
+		// this day also keeps the cum-denominator-still-zero null path.
+		shareDay(t, dir, "2026-08-10", nil, nil, all),
 		// Uncovered day: C prints nothing all session — whole day skipped
 		// for every basket (D2b).
-		shareDay(t, dir, "2026-08-11", map[string]float64{"A": 99}, []string{"A", "B"}),
+		shareDay(t, dir, "2026-08-11", map[string]float64{"A": 99}, nil, []string{"A", "B"}),
 	}
 	profiles, skipped, err := BuildShares(testBaskets, days)
 	if err != nil {
@@ -82,6 +101,8 @@ func TestBuildSharesHandComputed(t *testing.T) {
 	}
 	// x @575: samples {.3,.4,.5,.6,.7} — median .5, MAD .1 → σ .1×1.4826.
 	// Days = 5: the 0/0 day contributed no sample; the uncovered day is out.
+	// The $10 cross on A moves NOTHING here — per-minute shares count the
+	// Counted slice only (crosses excluded).
 	// Expectations run through robust() on the same float ratios the build
 	// produces — binary rounding must match, not just decimal intent.
 	wantMed, wantSig := robust([]float64{30.0 / 100, 40.0 / 100, 50.0 / 100, 60.0 / 100, 70.0 / 100})
@@ -112,23 +133,27 @@ func TestBuildSharesHandComputed(t *testing.T) {
 		t.Errorf("x@600 = %+v, want 0 samples", q)
 	}
 
-	// D7 cumulative family. Through 575 the cumulative equals the
-	// per-minute share (first traded minute), and the 0/0 day has no
-	// cumulative denominator yet → CumDays 5, same median/σ.
-	if x.CumDays != 5 || x.MedianCumShare != wantMed || x.SigmaCumShare != wantSig {
-		t.Errorf("x cum@575 = %+v", x)
+	// D7 cumulative family — the AUCTION-INCLUSIVE slice: A's $10 opening
+	// cross enters numerator and denominator (per-minute samples above
+	// were unmoved by it). Through 575: x = (A+10)/110, and the 0/0 day
+	// (no crosses either) has no cumulative denominator yet → CumDays 5.
+	wantCumMed575, wantCumSig575 := robust([]float64{40.0 / 110, 50.0 / 110, 60.0 / 110, 70.0 / 110, 80.0 / 110})
+	if x.CumDays != 5 || x.MedianCumShare != wantCumMed575 || x.SigmaCumShare != wantCumSig575 {
+		t.Errorf("x cum@575 = %+v, want med %v sig %v", x, wantCumMed575, wantCumSig575)
 	}
 	// Through 576: each day adds $1 A + $1 B to x and $3 to the universe;
 	// the 09:35-silent day now samples too (2/3). Same-path expectations.
-	wantCumMed, wantCumSig := robust([]float64{32.0 / 103, 42.0 / 103, 52.0 / 103, 62.0 / 103, 72.0 / 103, 2.0 / 3.0})
+	wantCumMed, wantCumSig := robust([]float64{42.0 / 113, 52.0 / 113, 62.0 / 113, 72.0 / 113, 82.0 / 113, 2.0 / 3.0})
 	if x6.CumDays != 6 || x6.MedianCumShare != wantCumMed || x6.SigmaCumShare != wantCumSig {
 		t.Errorf("x cum@576 = %+v, want med %v sig %v", x6, wantCumMed, wantCumSig)
 	}
 	// After the last trade of the day the cumulative freezes: minute 600
 	// has no per-minute samples but carries the same cumulative as 576.
+	// The $500 CLOSING cross froze nothing open — its 16:00:00 SIP ts is
+	// past the [open, close) window, so it appears in NO minute's cum.
 	q, _ := byName["x"].Minute(600)
 	if q.CumDays != 6 || q.MedianCumShare != wantCumMed || q.SigmaCumShare != wantCumSig {
-		t.Errorf("x cum@600 = %+v, want frozen cum from 576", q)
+		t.Errorf("x cum@600 = %+v, want frozen cum from 576 (closing cross excluded)", q)
 	}
 }
 
@@ -149,16 +174,19 @@ func TestFlowShareFloors(t *testing.T) {
 	if got := floors[600-session.OpenMinute]; got != 0 {
 		t.Errorf("floor@600 = %v, want 0", got)
 	}
-	// The cumulative family floors independently: at 575 it equals the
-	// per-minute floor (identical samples there); at 600 the per-minute
-	// floor is 0 but the cumulative one is defined (cum freezes, CumDays 6).
+	// The cumulative family floors independently, on its auction-inclusive
+	// samples: σ_cum@575 across baskets = {0 (flat), σx_cum, σy_cum} with
+	// the cum sample sets from the hand-computed test; at 600 the
+	// per-minute floor is 0 but the cumulative one is defined (cum
+	// freezes, CumDays 6).
 	cumFloors, err := CumShareFloors(profiles, 0.25)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cumFloors[575-session.OpenMinute] != floors[575-session.OpenMinute] {
-		t.Errorf("cum floor@575 = %v, want %v (same samples as per-minute there)",
-			cumFloors[575-session.OpenMinute], floors[575-session.OpenMinute])
+	_, sigXCum := robust([]float64{40.0 / 110, 50.0 / 110, 60.0 / 110, 70.0 / 110, 80.0 / 110})
+	_, sigYCum := robust([]float64{70.0 / 110, 60.0 / 110, 50.0 / 110, 40.0 / 110, 30.0 / 110})
+	if got, want := cumFloors[575-session.OpenMinute], 0.25*median([]float64{0, sigXCum, sigYCum}); got != want {
+		t.Errorf("cum floor@575 = %v, want %v", got, want)
 	}
 	if cumFloors[600-session.OpenMinute] <= 0 {
 		t.Errorf("cum floor@600 = %v, want >0 (cumulative family is defined where per-minute is not)",
@@ -168,7 +196,7 @@ func TestFlowShareFloors(t *testing.T) {
 
 func TestBuildSharesRejectsDuplicateDates(t *testing.T) {
 	dir := t.TempDir()
-	d := shareDay(t, dir, "2026-08-03", map[string]float64{"A": 30, "C": 70}, []string{"A", "B", "C"})
+	d := shareDay(t, dir, "2026-08-03", map[string]float64{"A": 30, "C": 70}, nil, []string{"A", "B", "C"})
 	if _, _, err := BuildShares(testBaskets, []Day{d, d}); err == nil {
 		t.Error("duplicate dates accepted")
 	}

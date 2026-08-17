@@ -43,7 +43,11 @@ const SharesDir = "baskets"
 // D7 since-open cumulative family: the day's share of the tape from the
 // open THROUGH this minute. The two families sample independently — a
 // silent minute has no per-minute share but usually a defined cumulative
-// one (anything traded earlier keeps the cumulative denominator >0).
+// one (anything traded earlier keeps the cumulative denominator >0) — and
+// count different slices: per-minute on Counted, cumulative on
+// CountedWithAuctions (D7 amendment 2026-08-16 — the opening cross belongs
+// in the since-open story; the closing cross stays outside the [open,
+// close) window, see docs/backlog.md "closing-cross inclusion").
 type ShareRow struct {
 	MinuteOfDay    int
 	Days           int // per-minute samples present (D2b/D3 skips excluded)
@@ -84,7 +88,10 @@ type SkippedDay struct {
 // which any union member printed zero trades across the whole regular
 // session is skipped for EVERY basket — an uncovered member corrupts the
 // common denominator (D2b). A minute whose universe counted $vol is 0
-// contributes no sample (D3: 0/0 is not a zero share).
+// contributes no sample (D3: 0/0 is not a zero share). The per-minute
+// family counts the Counted slice; the cumulative family counts
+// CountedWithAuctions on both numerator and denominator (D7 amendment) —
+// the runtime metric must read the identical slices or every z is garbage.
 func BuildShares(baskets []universe.Basket, days []Day) ([]ShareProfile, []SkippedDay, error) {
 	if len(baskets) == 0 {
 		return nil, nil, fmt.Errorf("no baskets")
@@ -137,13 +144,17 @@ func BuildShares(baskets []universe.Basket, days []Day) ([]ShareProfile, []Skipp
 				return nil, nil, err
 			}
 		}
-		// Per-symbol counted dollars per minute, plus raw print counts for
-		// the D2b coverage rule (coverage looks at ALL prints — a symbol
-		// whose only activity was crosses still traded that day).
+		// Per-symbol per-minute dollars in each family's slice — Counted
+		// for the per-minute family, CountedWithAuctions for the cumulative
+		// family (D7 amendment) — plus raw print counts for the D2b
+		// coverage rule (coverage looks at ALL prints — a symbol whose only
+		// activity was crosses still traded that day).
 		dollars := map[string][]float64{}
+		auctionDollars := map[string][]float64{}
 		var uncovered []string
 		for _, sym := range union {
 			ds := make([]float64, session.MinutesPerSession)
+			as := make([]float64, session.MinutesPerSession)
 			var prints int64
 			for i := range ds {
 				min, err := sess.DeriveMinute(sym, starts[i])
@@ -151,9 +162,11 @@ func BuildShares(baskets []universe.Basket, days []Day) ([]ShareProfile, []Skipp
 					return nil, nil, err
 				}
 				_, ds[i] = Counted(min)
+				_, as[i] = CountedWithAuctions(min)
 				prints += min.Trades
 			}
 			dollars[sym] = ds
+			auctionDollars[sym] = as
 			if prints == 0 {
 				uncovered = append(uncovered, sym)
 			}
@@ -162,20 +175,26 @@ func BuildShares(baskets []universe.Basket, days []Day) ([]ShareProfile, []Skipp
 			skipped = append(skipped, SkippedDay{Date: d.Date, Uncovered: uncovered})
 			continue
 		}
+		// The minute loop covers [open, close) only, so the closing cross
+		// (16:00:00 SIP ts, minute 960) never enters the cumulative — the
+		// same clamp the runtime window applies (see docs/backlog.md
+		// "closing-cross inclusion in cumulative share").
 		cumUni := 0.0
 		cumBasket := make([]float64, len(baskets))
 		for i := 0; i < session.MinutesPerSession; i++ {
-			var uni float64
+			var uni, uniAuction float64
 			for _, sym := range union {
 				uni += dollars[sym][i]
+				uniAuction += auctionDollars[sym][i]
 			}
-			cumUni += uni
+			cumUni += uniAuction
 			for bi, b := range baskets {
-				var bd float64
+				var bd, bdAuction float64
 				for _, m := range b.Members {
 					bd += dollars[m][i]
+					bdAuction += auctionDollars[m][i]
 				}
-				cumBasket[bi] += bd
+				cumBasket[bi] += bdAuction
 				if uni != 0 { // 0/0 minute: no per-minute sample (D3)
 					samples[bi][i] = append(samples[bi][i], bd/uni)
 				}

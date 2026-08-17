@@ -183,6 +183,23 @@ func TestRankAndStyle(t *testing.T) {
 	}
 }
 
+// TestSetFooter: a composed view's footer renders below the table after a
+// blank line; the default (dev) view sets none and renders none.
+func TestSetFooter(t *testing.T) {
+	v, atSec := newTestView(t)
+	if out := v.Render(atSec); strings.Contains(out, "\n\n") {
+		t.Errorf("default view renders a footer separator:\n%s", out)
+	}
+	v.SetFooter("a = statement of measurement\nb = another\n")
+	out := v.Render(atSec)
+	if !strings.HasSuffix(out, "\n\na = statement of measurement\nb = another\n") {
+		t.Errorf("footer missing or misplaced:\n%s", out)
+	}
+	if out != v.Render(atSec) {
+		t.Error("footer render not deterministic")
+	}
+}
+
 // TestNewRejectsMissingProfile: a member without a profile must fail loudly
 // at construction, not render fake-zero baselines.
 func TestNewRejectsMissingProfile(t *testing.T) {

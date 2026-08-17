@@ -1,6 +1,8 @@
 package flowshare
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"buddy-flow/internal/bucket"
@@ -87,6 +89,12 @@ func TestColumns(t *testing.T) {
 	// One print in the in-progress 13:01 minute: A trades $50 at 13:01:02.
 	table2 := table
 	store.ObserveTrade(&ingest.Trade{State: table2.Lookup("A"), Price: 1, Size: 50, SipTs: (start + 62) * 1e9})
+	// One CROSS print (condition 18 → CROSS_REOPEN) inside the completed
+	// 13:00 minute: A crosses $100 at 13:00:30. The same print must be
+	// EXCLUDED from every per-minute column (Counted slice) and INCLUDED
+	// in the cumulative columns (auction-inclusive slice, D7 amendment).
+	store.ObserveTrade(&ingest.Trade{State: table2.Lookup("A"), Price: 1, Size: 100, SipTs: (start + 30) * 1e9,
+		Cond: [ingest.MaxConditions]int32{18}, NCond: 1})
 
 	prof := &profile.ShareProfile{Basket: "x", Rows: make([]profile.ShareRow, session.MinutesPerSession)}
 	floors := &profile.Floors{Rows: make([]profile.FloorRow, session.MinutesPerSession)}
@@ -117,26 +125,32 @@ func TestColumns(t *testing.T) {
 	if got["flow_share"] != "100.00%" {
 		t.Errorf("flow_share = %q, want 100.00%%", got["flow_share"])
 	}
-	// flow_share_z: completed 13:00 share = 400/1000 = 0.4 against median
-	// 0.25 at minute 780, σ 0 floored to 0.0625 → z = +2.4.
+	// flow_share_z: completed 13:00 COUNTED share = 400/1000 = 0.4 (the
+	// $100 cross excluded) against median 0.25 at minute 780, σ 0 floored
+	// to 0.0625 → z = +2.4.
 	if got["flow_share_z"] != "+2.4" {
 		t.Errorf("flow_share_z = %q, want +2.4", got["flow_share_z"])
 	}
-	// concentration: completed minute, basket {A,B} → A $300 of $400.
+	// concentration: completed minute, Counted slice → A $300 of $400
+	// (A's cross does not lift it to 400/500).
 	if got["concentration"] != "A 75%" {
 		t.Errorf("concentration = %q, want A 75%%", got["concentration"])
 	}
 	// D7 cumulative columns: window [09:30, 13:01) EXCLUDES the 13:01:02
-	// print — cum share = 400/1000 = 40%, keyed to minute 780 (a wrong key
-	// hits CumDays=0 and gaps). z = (0.4 − 0.25) / max(0, 0.125) = +1.2.
-	if got["cum_share"] != "40.00%" {
-		t.Errorf("cum_share = %q, want 40.00%%", got["cum_share"])
+	// print and INCLUDES the cross — cum share = (400+100)/(1000+100),
+	// keyed to minute 780 (a wrong key hits CumDays=0 and gaps).
+	// z = (500/1100 − 0.25) / max(0, 0.125) — same-path float vars, never
+	// folded constants.
+	cumShare := 500.0 / 1100.0
+	if want := fmt.Sprintf("%.2f%%", 100*cumShare); got["cum_share"] != want {
+		t.Errorf("cum_share = %q, want %s", got["cum_share"], want)
 	}
 	if got["cum_share_typ"] != "25.00%" {
 		t.Errorf("cum_share_typ = %q, want 25.00%%", got["cum_share_typ"])
 	}
-	if got["cum_share_z"] != "+1.2" {
-		t.Errorf("cum_share_z = %q, want +1.2", got["cum_share_z"])
+	med, floor := 0.25, 0.125
+	if want := fmt.Sprintf("%+.1f", (cumShare-med)/floor); got["cum_share_z"] != want {
+		t.Errorf("cum_share_z = %q, want %s", got["cum_share_z"], want)
 	}
 	// A row rendered for an unknown basket gaps the z (no profile).
 	rcQuiet := &devview.RowCtx{Basket: &devview.BasketRow{Name: "nope", States: states(table, "D")}, AtSec: start + 65}
@@ -174,11 +188,29 @@ func TestTraderColumns(t *testing.T) {
 			CumDays: 20, MedianCumShare: 0.1, SigmaCumShare: 0}
 		floors.Rows[i] = profile.FloorRow{MinuteOfDay: session.OpenMinute + i, SigmaFloorCumShare: 0.125}
 	}
-	cols, rank := TraderColumns(store, states(table, "A", "B", "C"), map[string]*profile.ShareProfile{"x": prof}, floors)
+	cols, rank, footer := TraderColumns(store, states(table, "A", "B", "C"), map[string]*profile.ShareProfile{"x": prof}, floors)
 	wantOrder := []string{"cum_share", "cum_share_typ", "cum_share_z", "relative_vol", "concentration"}
 	for i, w := range wantOrder {
 		if cols[i].Name != w {
 			t.Fatalf("column %d = %s, want %s", i, cols[i].Name, w)
+		}
+		// The footer defines every rendered column (plus the gap glyph);
+		// the clock-line legends moved there — columns carry none.
+		if !strings.Contains(footer, w+" ") {
+			t.Errorf("footer does not define column %s", w)
+		}
+		if cols[i].Legend != "" {
+			t.Errorf("column %s carries a clock-line legend %q; the footer explains columns now", w, cols[i].Legend)
+		}
+	}
+	if !strings.Contains(footer, "·") {
+		t.Error("footer does not define the gap glyph")
+	}
+	// Scope law: statements of measurement only — spot-guard the obvious
+	// violations in rendered trader-facing text.
+	for _, banned := range []string{"buy", "sell", "Buy", "Sell"} {
+		if strings.Contains(footer, banned) {
+			t.Errorf("footer contains %q — scope law bans buy/sell language", banned)
 		}
 	}
 	rc := &devview.RowCtx{Basket: &devview.BasketRow{Name: "x", States: states(table, "A", "B")}, AtSec: start + 65}

@@ -13,11 +13,15 @@ the 3.0 terminal table with a trader column set, sorted by significance —
 the screen IS the morning's story, top to bottom.
 
 Columns: `cum_share`, `cum_share_typ`, `cum_share_z` (the 3.1-D7 family:
-share of the tracked tape since open vs typical by this time of day),
-`relative_vol` (completed minute vs matched-minute baseline), and
-`concentration` (top member's % of basket $vol, completed minute). No
-per-minute share z (flickers), no dev plumbing columns, no cum $vol (owner
-call — revisit; a typical-cum-$vol baseline would need the D7 treatment).
+share of the tracked tape since open vs typical by this time of day —
+**auction-inclusive** since the 2026-08-16 D7 amendment: opening/reopening
+crosses count; the closing cross stays outside the `[open, close)` window),
+`relative_vol` (completed minute vs matched-minute baseline, Counted slice
+— per-minute columns exclude crosses; the two slices on one screen are
+deliberate and the footer documents it), and `concentration` (top member's
+% of basket $vol, completed minute). No per-minute share z (flickers), no
+dev plumbing columns, no cum $vol (owner call — revisit; a
+typical-cum-$vol baseline would need the D7 treatment).
 
 ## Decisions
 
@@ -48,6 +52,17 @@ call — revisit; a typical-cum-$vol baseline would need the D7 treatment).
   `internal/flowshare` and installed via new devview seams
   (`SetColumns`, `SetRank`, `Column.Style`); the dev view's defaults and
   behavior are untouched.
+
+- **T6 — Plain-English footer (added 2026-08-16, product owner).** Trader
+  mode renders a short fixed block below the table defining every column
+  for a trader with no context (`flowshare.TraderFooter`, installed via a
+  new `SetFooter` seam that travels with the composed column set — the dev
+  view gets no footer). Statements of measurement only — no buy/sell or
+  recommendation language anywhere (scope law); a test guards the obvious
+  violations. The footer is a constant, so Render stays a pure function of
+  (store state, second). The clock line keeps naming the completed and
+  in-progress minutes but drops the per-column legend clauses — the footer
+  explains the columns now.
 
 ## Done when
 

@@ -10,7 +10,7 @@ import (
 )
 
 func print(s *bucket.Store, st *ingest.SymbolState, sec int64, price float64) {
-	s.ObserveTrade(&ingest.Trade{State: st, Price: price, Size: 1, SipTs: sec * 1e9})
+	printSz(s, st, sec, price, 1) // printSz (volume_test.go) with the price tests' unit size
 }
 
 // synth: open 09:30 on 2026-08-14. SPY flat at 100. Hand-computed states at
@@ -21,9 +21,12 @@ func print(s *bucket.Store, st *ingest.SymbolState, sec int64, price float64) {
 //	C: 100 → 100.05 at 09:30:30         — +5bps, inside ±10bps → in-line
 //	D: 100 → 101 at 09:30:10, 99 at 09:33:30 — ↑↑ then ↓ → flip, counts ·
 //	E: never trades                      — unmeasured → folds to ·
+//	L: first trades 09:33:10 (100 → 102 by 09:33:40) — ↑ in the newest
+//	   window only, UNMEASURABLE in the ones ending 09:33/09:32:
+//	   persistence never demonstrated → the middle, never a partial ↑
 func synth(t *testing.T) (*Calc, *ingest.Table, int64) {
 	t.Helper()
-	table := ingest.NewTable([]string{"SPY", "A", "B", "C", "D", "E"})
+	table := ingest.NewTable([]string{"SPY", "A", "B", "C", "D", "E", "L"})
 	s := bucket.NewStore()
 	open, err := session.BucketStart("2026-08-14", session.OpenMinute)
 	if err != nil {
@@ -39,6 +42,8 @@ func synth(t *testing.T) (*Calc, *ingest.Table, int64) {
 	print(s, table.Lookup("D"), open, 100)
 	print(s, table.Lookup("D"), open+10, 101)
 	print(s, table.Lookup("D"), open+3*60+30, 99)
+	print(s, table.Lookup("L"), open+3*60+10, 100)
+	print(s, table.Lookup("L"), open+3*60+40, 102)
 	c, err := New(s, table)
 	if err != nil {
 		t.Fatal(err)
@@ -71,6 +76,12 @@ func TestBreadthHandComputed(t *testing.T) {
 	// Down-side basket: persistence works for underperformers too.
 	if got := c.DetailColumn().Cell(row(table, at, "B")); got != "0↑ 0· 1↓" {
 		t.Errorf("down basket = %q", got)
+	}
+	// Late starter: L is ↑ in the newest window but unmeasurable in the
+	// older ones — persistence never demonstrated folds to the middle,
+	// never a partial ↑ (the doc rule, pinned).
+	if got := c.DetailColumn().Cell(row(table, at, "A", "L")); got != "1↑ 1· 0↓" {
+		t.Errorf("late-start member = %q, want 1↑ 1· 0↓", got)
 	}
 }
 

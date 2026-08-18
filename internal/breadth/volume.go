@@ -53,6 +53,8 @@ type VolCalc struct {
 
 	memoAt int64
 	vols   map[*ingest.SymbolState]volState
+	end    int64 // memoized window(atSec) result — computed once per render
+	winOK  bool  // second, not per column per basket (review 2026-08-17)
 }
 
 // NewVol wires the volume calc. profiles is read-only shared state (the
@@ -61,12 +63,13 @@ func NewVol(price *Calc, store *bucket.Store, profiles map[string]*profile.Profi
 	return &VolCalc{price: price, store: store, profiles: profiles}
 }
 
-func (vc *VolCalc) memo(atSec int64) {
-	if vc.memoAt == atSec && vc.vols != nil {
-		return
+func (vc *VolCalc) memo(atSec int64) (end int64, ok bool) {
+	if vc.memoAt != atSec || vc.vols == nil {
+		vc.memoAt = atSec
+		vc.vols = map[*ingest.SymbolState]volState{}
+		_, vc.end, vc.winOK = window(atSec, PersistMinutes)
 	}
-	vc.memoAt = atSec
-	vc.vols = map[*ingest.SymbolState]volState{}
+	return vc.end, vc.winOK
 }
 
 // vol is one member's volume state over the PersistMinutes completed
@@ -79,14 +82,14 @@ func (vc *VolCalc) vol(st *ingest.SymbolState, end int64) volState {
 	if s, seen := vc.vols[st]; seen {
 		return s
 	}
-	s := volUnusual
 	p := vc.profiles[st.Symbol]
+	if p == nil {
+		vc.vols[st] = volUnmeasured
+		return volUnmeasured
+	}
+	s := volUnusual
 	for j := 0; j < PersistMinutes; j++ {
 		minStart := end - int64(j+1)*60
-		if p == nil {
-			s = volUnmeasured
-			break
-		}
 		row, ok := p.Minute(session.MinuteOfDay(minStart * 1e9))
 		if !ok || row.MedianDollars == 0 {
 			s = volUnmeasured
@@ -104,16 +107,15 @@ func (vc *VolCalc) vol(st *ingest.SymbolState, end int64) volState {
 
 // counts tallies a basket at atSec: unusual/unmeasured over full
 // membership (direction-blind — needs no SPY), and the conjunction
-// upOnVol/up against the 3.2 price sides. priceOK=false when the price
-// side gaps (SPY unmeasurable, zero price-measured members, VB4);
-// ok=false before the persistence horizon or with zero volume-measured
-// members.
+// upOnVol/up against the 3.2 price sides. priceOK is sides' own verdict —
+// the zero-measured gate lives in sides, its single owner, so this cell
+// and the 3.2 breadth cell reconcile by construction (VB4); ok=false
+// before the persistence horizon or with zero volume-measured members.
 func (vc *VolCalc) counts(members []*ingest.SymbolState, atSec int64) (unusual, unmeasured, up, upOnVol int, priceOK, ok bool) {
-	_, end, ok := window(atSec, PersistMinutes)
+	end, ok := vc.memo(atSec)
 	if !ok {
 		return 0, 0, 0, 0, false, false
 	}
-	vc.memo(atSec)
 	for _, st := range members {
 		switch vc.vol(st, end) {
 		case volUnusual:
@@ -127,11 +129,7 @@ func (vc *VolCalc) counts(members []*ingest.SymbolState, atSec int64) (unusual, 
 	}
 	sides, priceOK := vc.price.sides(members, atSec)
 	if priceOK {
-		measured := 0
 		for i, m := range sides {
-			if m.measured {
-				measured++
-			}
 			if m.side > 0 {
 				up++
 				// A price-↑ member that is volume-unmeasured counts in
@@ -141,7 +139,6 @@ func (vc *VolCalc) counts(members []*ingest.SymbolState, atSec int64) (unusual, 
 				}
 			}
 		}
-		priceOK = measured > 0 // reconcile with count's zero-measured gap
 	}
 	return unusual, unmeasured, up, upOnVol, priceOK, true
 }

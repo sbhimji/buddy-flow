@@ -145,18 +145,20 @@ func (c *Calc) state(st *ingest.SymbolState, openSec, endSec int64, spyRet float
 }
 
 // memberSide is one member's persistent read: side ∈ {+1, 0, −1};
-// measured=false when the member lacked a defined state in some
-// persistence window (it folds to the in-line middle).
+// side folds a member without a defined state in every persistence window
+// to 0 (the in-line middle) — persistence never demonstrated is never a
+// partial ↑/↓.
 type memberSide struct {
-	side     int
-	measured bool
+	side int
 }
 
 // sides computes every member's persistent side over the PersistMinutes
 // windows ending at the last completed minute — the per-member tally count
 // aggregates and the 3.2b volume conjunction reuses (one computation, two
-// consumers). ok=false before the persistence horizon or when SPY is
-// unmeasurable in any needed window.
+// consumers). ok=false before the persistence horizon, when SPY is
+// unmeasurable in any needed window, or when NO member measured — the
+// zero-measured gate lives here, its single owner, so the breadth cell and
+// the 3.2b conjunction can never disagree on it (VB4).
 func (c *Calc) sides(members []*ingest.SymbolState, atSec int64) ([]memberSide, bool) {
 	openSec, end, ok := window(atSec, PersistMinutes)
 	if !ok {
@@ -174,6 +176,7 @@ func (c *Calc) sides(members []*ingest.SymbolState, atSec int64) ([]memberSide, 
 		spyRets[j] = sp.v/sa.v - 1
 	}
 	out := make([]memberSide, len(members))
+	measured := 0
 	for i, st := range members {
 		side, sideOK := 0, true
 		for j := 0; j < PersistMinutes; j++ {
@@ -190,27 +193,28 @@ func (c *Calc) sides(members []*ingest.SymbolState, atSec int64) ([]memberSide, 
 		}
 		if !sideOK {
 			side = 0
+		} else {
+			measured++
 		}
-		out[i] = memberSide{side: side, measured: sideOK}
+		out[i] = memberSide{side: side}
+	}
+	if measured == 0 {
+		return nil, false // "0/9" over nothing measured would be a fake statement
 	}
 	return out, true
 }
 
-// count tallies a basket: up/inline/down over full membership, measured =
-// members with a defined state in every persistence window. A member must
-// hold one non-inline side across ALL PersistMinutes windows to count
+// count tallies a basket: up/inline/down over full membership. A member
+// must hold one non-inline side across ALL PersistMinutes windows to count
 // ↑/↓; everything else — in-line, flapping, unmeasured — is the middle.
-// ok=false when SPY is unmeasurable in any window or no member measured.
+// ok=false comes entirely from sides (SPY unmeasurable, horizon, or no
+// member measured).
 func (c *Calc) count(members []*ingest.SymbolState, atSec int64) (up, inline, down int, ok bool) {
 	sides, ok := c.sides(members, atSec)
 	if !ok {
 		return 0, 0, 0, false
 	}
-	measured := 0
 	for _, m := range sides {
-		if m.measured {
-			measured++
-		}
 		switch {
 		case m.side > 0:
 			up++
@@ -219,9 +223,6 @@ func (c *Calc) count(members []*ingest.SymbolState, atSec int64) (up, inline, do
 		default:
 			inline++
 		}
-	}
-	if measured == 0 {
-		return 0, 0, 0, false // "0/9" over nothing measured would be a fake statement
 	}
 	return up, inline, down, true
 }

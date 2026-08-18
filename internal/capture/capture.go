@@ -12,12 +12,15 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -47,24 +50,55 @@ type Writer struct {
 	Bytes  atomic.Int64 // this process's appended bytes (exact, incl. framing)
 }
 
+// ErrExists means a non-empty capture stream already exists for the date
+// and the caller did not consent to resuming it. The capture is the
+// canonical, irreplaceable record: appending must be a stated intent
+// (an accidental smoke-test resume polluted a real session on 2026-08-17),
+// so the refusal lives here — decided under the writer's own lock, not by
+// a caller's separate racy stat.
+var ErrExists = errors.New("capture stream already exists (resume not requested)")
+
+// ErrLocked means another live process holds this date's stream right now.
+// Two concurrent appenders would interleave mid-line and corrupt the
+// record; the advisory flock held for the writer's lifetime makes the
+// one-instance-per-session-date rule mechanical instead of procedural.
+var ErrLocked = errors.New("capture stream is locked by another process")
+
 // NewWriter opens (creating or appending) data/capture/<date>/stream.jsonl.
 // Append mode is what makes a restart after a kill continue the same session
-// file rather than truncating it (done-when #3). A pre-existing non-empty
-// stream marks the session resumed; the manifest carries that provenance so
-// this-run counts are never mistaken for whole-file counts (review #3).
-func NewWriter(baseDir, date string) (*Writer, error) {
+// file rather than truncating it (done-when #3) — but resuming requires
+// resume=true; a pre-existing non-empty stream otherwise returns ErrExists.
+// A resumed stream marks the session resumed; the manifest carries that
+// provenance so this-run counts are never mistaken for whole-file counts
+// (review #3). The prior-size decision is made AFTER taking an exclusive
+// flock on the opened file, so there is no stat-then-open window for a
+// second instance to slip through; the lock is held until Close, so a
+// concurrent second instance fails with ErrLocked no matter its flags.
+// (A refused open may leave behind an empty stream.jsonl from O_CREATE —
+// harmless: empty means not resumed.)
+func NewWriter(baseDir, date string, resume bool) (*Writer, error) {
 	dir := filepath.Join(baseDir, date)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(dir, "stream.jsonl")
-	var prior int64
-	if fi, err := os.Stat(path); err == nil {
-		prior = fi.Size()
-	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("%w: %s", ErrLocked, path)
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close() // never proceed on an unverifiable prior size
+		return nil, err
+	}
+	prior := fi.Size()
+	if prior > 0 && !resume {
+		f.Close()
+		return nil, fmt.Errorf("%w: %s (%d bytes)", ErrExists, path, prior)
 	}
 	return &Writer{
 		dir: dir, f: f, bw: bufio.NewWriterSize(f, 1<<20),

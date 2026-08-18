@@ -238,7 +238,7 @@ type cells struct {
 	shares map[string]*profile.ShareProfile
 	floors *profile.Floors
 
-	curWin, prevWin, cumWin winSnap
+	curWin, prevWin, cumWin, deltaWin winSnap
 }
 
 func (c *cells) prevShare(rc *devview.RowCtx) (float64, bool) {
@@ -253,27 +253,88 @@ func (c *cells) prevShare(rc *devview.RowCtx) (float64, bool) {
 // 16:00:00+ SIP timestamps, past the [open, close) window (deferred
 // deliberately; docs/backlog.md "closing-cross inclusion in cumulative
 // share"). key is the matched-bucket minute for the baseline. ok=false
-// before the first completed session minute.
+// before the first completed session minute. Derived from liveCumWindow —
+// one place owns the open/close/minute-boundary math.
 func (c *cells) cumWindow(atSec int64) (fromSec, toSec int64, key int, ok bool) {
+	openSec, cmEnd, _, ok := c.liveCumWindow(atSec)
+	if !ok || cmEnd <= openSec {
+		return 0, 0, 0, false
+	}
+	return openSec, cmEnd, session.MinuteOfDay((cmEnd - 60) * 1e9), true
+}
+
+// liveCumWindow is the live-cadence span (trader-view-live-cadence
+// mini-spec): [openSec, liveEnd) with liveEnd = this second inclusive,
+// clamped at the close (closing cross stays excluded, same deferral as
+// cumWindow). cmEnd is the completed-minute boundary splitting the span
+// into the existing cum snapshot's window and the small delta window —
+// before the first completed minute cmEnd == openSec and the delta
+// carries alone.
+func (c *cells) liveCumWindow(atSec int64) (openSec, cmEnd, liveEnd int64, ok bool) {
 	date := session.Date(atSec * 1e9)
 	openSec, err1 := session.BucketStart(date, session.OpenMinute)
 	closeSec, err2 := session.BucketStart(date, session.CloseMinute)
 	if err1 != nil || err2 != nil {
 		return 0, 0, 0, false
 	}
-	end := session.MinuteStart(atSec * 1e9)
-	if end > closeSec {
-		end = closeSec
+	liveEnd = atSec + 1
+	if liveEnd > closeSec {
+		liveEnd = closeSec
 	}
-	if end <= openSec {
+	if liveEnd <= openSec {
 		return 0, 0, 0, false
 	}
-	return openSec, end, session.MinuteOfDay((end - 60) * 1e9), true
+	cmEnd = session.MinuteStart(atSec * 1e9)
+	if cmEnd > closeSec {
+		cmEnd = closeSec
+	}
+	if cmEnd < openSec {
+		cmEnd = openSec
+	}
+	return openSec, cmEnd, liveEnd, true
+}
+
+// primeLiveCum primes the two snapshots covering [open, this second] in
+// the auction-inclusive slice: cumWin holds the completed-minute span,
+// deltaWin the in-progress remainder. Either span may be empty (first
+// session minute; post-close) — an empty-window get zeroes the snapshot,
+// so callers read both dollar maps directly and sum, no staleness and no
+// per-member indirection. Reads are only valid within the same render
+// (snapshots memoize on atSec). ok=false before the open.
+func (c *cells) primeLiveCum(atSec int64) bool {
+	openSec, cmEnd, liveEnd, ok := c.liveCumWindow(atSec)
+	if !ok {
+		return false
+	}
+	c.cumWin.get(c.store, c.union, profile.CountedWithAuctions, openSec, cmEnd, atSec)
+	c.deltaWin.get(c.store, c.union, profile.CountedWithAuctions, cmEnd, liveEnd, atSec)
+	return true
+}
+
+// cumShareLive is the rendered cum_share: since open through THIS second.
+// Numerator and denominator move together, so it is a true measurement at
+// any instant; typ and z stay completed-minute (cumShare below) — an
+// intra-minute z against full-minute baselines would be drift, not signal.
+func (c *cells) cumShareLive(rc *devview.RowCtx) (float64, bool) {
+	if !c.primeLiveCum(rc.AtSec) {
+		return 0, false
+	}
+	uni := c.cumWin.uni + c.deltaWin.uni
+	if uni == 0 {
+		return 0, false
+	}
+	var bd float64
+	for _, st := range rc.Basket.States {
+		bd += c.cumWin.dollars[st] + c.deltaWin.dollars[st]
+	}
+	return bd / uni, true
 }
 
 // cumShare reads the auction-inclusive slice (D7 amendment): the opening
 // auction belongs in the since-open story, and its baseline (BuildShares)
-// accumulates the identical slice — the operands must reconcile.
+// accumulates the identical slice — the operands must reconcile. This is
+// the COMPLETED-minute share: the z/typ operand (live-cadence mini-spec),
+// no longer what the cum_share cell displays.
 func (c *cells) cumShare(rc *devview.RowCtx) (float64, int, bool) {
 	from, to, key, ok := c.cumWindow(rc.AtSec)
 	if !ok {
@@ -296,9 +357,9 @@ func (c *cells) cumZ(rc *devview.RowCtx) (float64, bool) {
 
 func (c *cells) cumShareCol() devview.Column {
 	return devview.Column{Name: "cum_share", Width: 9,
-		Legend: "cum_share* = since open through completed minute, incl. auction crosses (per-minute columns exclude them)",
+		Legend: "cum_share/concentration_day = since open through this second, incl. auction crosses; typ/z step by completed minute",
 		Cell: func(rc *devview.RowCtx) string {
-			s, _, ok := c.cumShare(rc)
+			s, ok := c.cumShareLive(rc)
 			if !ok {
 				return gap
 			}
@@ -367,22 +428,21 @@ func (c *cells) concentrationCol() devview.Column {
 // concentrationDayCol is the session-long concentration (trader-view
 // follow-up, owner-requested 2026-08-16): top member's share of the
 // basket's $vol over the SAME window and slice as cum_share — since open
-// through the completed minute, auction-inclusive — so "who carried this
-// basket today" reconciles with the since-open story it sits next to. It
-// reads the cum snapshot (one store pass shared across all rows of a
-// render) rather than rescanning per row; ties break first-wins over the
-// sorted member order, same as Concentration (D5 determinism).
+// through this second, auction-inclusive (live cadence rides with
+// cum_share by design) — so "who carried this basket today" reconciles
+// with the since-open story it sits next to. It reads the shared
+// snapshots (one store pass across all rows of a render) rather than
+// rescanning per row; ties break first-wins over the sorted member order,
+// same as Concentration (D5 determinism).
 func (c *cells) concentrationDayCol() devview.Column {
 	return devview.Column{Name: "concentration_day", Width: 17, Cell: func(rc *devview.RowCtx) string {
-		from, to, _, ok := c.cumWindow(rc.AtSec)
-		if !ok {
+		if !c.primeLiveCum(rc.AtSec) {
 			return gap
 		}
-		c.cumWin.get(c.store, c.union, profile.CountedWithAuctions, from, to, rc.AtSec)
 		var total, top float64
 		var sym string
 		for _, st := range rc.Basket.States {
-			d := c.cumWin.dollars[st]
+			d := c.cumWin.dollars[st] + c.deltaWin.dollars[st]
 			total += d
 			if d > top {
 				top, sym = d, st.Symbol
@@ -445,14 +505,14 @@ func Columns(store *bucket.Store, union []*ingest.SymbolState, shares map[string
 // recommendation language (scope law). It travels with the trader column
 // set (TraderColumns returns it; the dev view gets no footer) and is a
 // constant, so Render stays a pure function of (store state, second).
-const TraderFooter = `cum_share         = % of all dollars traded across our tracked universe since the open that went through this basket (includes opening auction)
-cum_share_typ     = what that % typically is by this time of day, median of the last 20 sessions
-cum_share_z       = how unusual today is vs those 20 days, in σ — ±1 ordinary, ±2 notable (highlighted), ±3 rare
+const TraderFooter = `cum_share         = % of all dollars traded across our tracked universe since the open that went through this basket (includes opening auction; live to this second)
+cum_share_typ     = what that % typically is by this time of day, median of the last 20 sessions (steps at each completed minute)
+cum_share_z       = how unusual today is vs those 20 days, in σ — ±1 ordinary, ±2 notable (highlighted), ±3 rare (compares completed minutes, so it steps each minute while cum_share moves)
 relative_vol      = last full minute's dollars vs the typical for that exact minute — 1.0 = normal pace
 breadth           = how many of this basket's stocks have beaten SPY since the open for 3 straight minutes (by more than 0.10%) — 8/9 is a crowd, 1/9 is one stock's story; bold green when over 70% of the basket is outperforming, bold red when over 70% is underperforming
 SPY (top line)    = the index's own price change since the open, the reference breadth is measured against — green above +0.10%, red below −0.10%, yellow in between
 concentration     = the single stock carrying the largest share of this basket's dollars last minute
-concentration_day = the single stock carrying the largest share of this basket's dollars since the open (incl. opening auction)
+concentration_day = the single stock carrying the largest share of this basket's dollars since the open (incl. opening auction; live to this second)
 ·                 = no basis for comparison — never a zero
 `
 

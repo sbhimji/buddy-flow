@@ -3,6 +3,7 @@ package capture
 import (
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,12 +20,17 @@ func TestWriterResumeManifest(t *testing.T) {
 	// whole-stream size so 1.5's integrity check compares against truth.
 	dir := t.TempDir()
 
-	w1, err := NewWriter(dir, "2026-01-02")
+	w1, err := NewWriter(dir, "2026-01-02", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if w1.resumed {
 		t.Fatal("first open must not be resumed")
+	}
+	// While w1 is open, a second writer must be refused by the flock —
+	// concurrent appenders corrupt the stream — regardless of resume flag.
+	if _, err := NewWriter(dir, "2026-01-02", true); !errors.Is(err, ErrLocked) {
+		t.Fatalf("concurrent open = %v, want ErrLocked", err)
 	}
 	if err := w1.Append(100, []byte(`[{"ev":"T"}]`)); err != nil {
 		t.Fatal(err)
@@ -33,7 +39,13 @@ func TestWriterResumeManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w2, err := NewWriter(dir, "2026-01-02")
+	// A non-empty stream refuses a non-consenting open (the 2026-08-17
+	// smoke-test pollution): resuming is a stated intent, never a default.
+	if _, err := NewWriter(dir, "2026-01-02", false); !errors.Is(err, ErrExists) {
+		t.Fatalf("unconsented reopen = %v, want ErrExists", err)
+	}
+
+	w2, err := NewWriter(dir, "2026-01-02", true)
 	if err != nil {
 		t.Fatal(err)
 	}

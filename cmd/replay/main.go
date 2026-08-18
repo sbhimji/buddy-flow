@@ -38,6 +38,7 @@ func main() {
 		quotesPath  = flag.String("quotes", "", "quotes flat file (.csv or .csv.gz); empty = skip")
 		capturePath = flag.String("capture", "", "captured live session (stream.jsonl[.gz]) to replay; exercises the live decoder")
 		speed       = flag.Float64("speed", 0, "capture replay pacing: 0=instant, 1=real-time (recorded spacing), N=accelerated ×N")
+		paceFrom    = flag.String("pace-from", "", "capture replay: ingest instantly until this ET HH:MM:SS, then pace per -speed (fast-forward to the open; requires -capture and -speed > 0)")
 		full        = flag.Bool("full", false, "stress mode: skip the universe filter (whole-market load)")
 		date        = flag.String("date", "", "session date YYYY-MM-DD (required with -from/-to)")
 		fromS       = flag.String("from", "", "window start, ET HH:MM:SS inclusive")
@@ -58,6 +59,18 @@ func main() {
 	if *speed != 0 && *capturePath == "" {
 		fmt.Fprintln(os.Stderr, "-speed applies only to -capture replay")
 		os.Exit(2)
+	}
+	if *paceFrom != "" {
+		if *capturePath == "" || *speed <= 0 {
+			fmt.Fprintln(os.Stderr, "-pace-from requires -capture and -speed > 0 (there is nothing to fast-forward in an instant replay)")
+			os.Exit(2)
+		}
+		// Validate NOW, same posture as -view-at: a malformed time must
+		// fail at flag parse, not after minutes of replay.
+		if _, err := time.Parse("15:04:05", *paceFrom); err != nil {
+			fmt.Fprintf(os.Stderr, "-pace-from must be ET HH:MM:SS: %v\n", err)
+			os.Exit(2)
+		}
 	}
 	// The view needs a session clock; flat-file replay streams trades and
 	// quotes concurrently with meaningless cross-feed order, so "current
@@ -198,8 +211,9 @@ func main() {
 		stopRender := startRenderLoop(dv)
 		start := time.Now()
 		ls, err := feed.StreamCapture(*capturePath, p, feed.ReplayOptions{
-			Speed: *speed,
-			Log:   func(f string, a ...any) { fmt.Printf("replay: "+f+"\n", a...) },
+			Speed:    *speed,
+			PaceFrom: *paceFrom,
+			Log:      func(f string, a ...any) { fmt.Printf("replay: "+f+"\n", a...) },
 		})
 		p.Close()
 		<-done

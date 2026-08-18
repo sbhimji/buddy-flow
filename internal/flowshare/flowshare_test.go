@@ -52,13 +52,25 @@ func TestShare(t *testing.T) {
 func TestConcentration(t *testing.T) {
 	store, table, start := synthStore(t)
 	// {A,B,C}: C dominates with 600/1000.
-	sym, frac, ok := Concentration(store, states(table, "A", "B", "C"), start, start+60)
+	sym, frac, ok := Concentration(store, states(table, "A", "B", "C"), profile.Counted, start, start+60)
 	if !ok || sym != "C" || frac != 0.6 {
 		t.Errorf("conc = %s %v %v; want C 0.6 true", sym, frac, ok)
 	}
 	// Zero-volume basket: gap, never "D 0%".
-	if _, _, ok := Concentration(store, states(table, "D"), start, start+60); ok {
+	if _, _, ok := Concentration(store, states(table, "D"), profile.Counted, start, start+60); ok {
 		t.Error("zero-volume basket reported a concentration")
+	}
+	// Auction-inclusive slice: a $600 cross on A (condition 18) flips the
+	// leader under CountedWithAuctions but not under Counted.
+	store.ObserveTrade(&ingest.Trade{State: table.Lookup("A"), Price: 1, Size: 600, SipTs: start * 1e9,
+		Cond: [ingest.MaxConditions]int32{18}, NCond: 1})
+	sym, _, _ = Concentration(store, states(table, "A", "B", "C"), profile.Counted, start, start+60)
+	if sym != "C" {
+		t.Errorf("counted-slice leader = %s, want C (cross must not count)", sym)
+	}
+	sym, frac, ok = Concentration(store, states(table, "A", "B", "C"), profile.CountedWithAuctions, start, start+60)
+	if !ok || sym != "A" || frac != 900.0/1600.0 {
+		t.Errorf("auction-slice conc = %s %v %v; want A %v true", sym, frac, ok, 900.0/1600.0)
 	}
 }
 
@@ -74,7 +86,7 @@ func TestConcentrationTieBreak(t *testing.T) {
 	for _, sym := range []string{"B", "A"} { // observe B first: order of prints must not matter
 		s.ObserveTrade(&ingest.Trade{State: table.Lookup(sym), Price: 1, Size: 100, SipTs: start * 1e9})
 	}
-	sym, frac, ok := Concentration(s, states(table, "A", "B"), start, start+60)
+	sym, frac, ok := Concentration(s, states(table, "A", "B"), profile.Counted, start, start+60)
 	if !ok || sym != "A" || frac != 0.5 {
 		t.Errorf("tie = %s %v %v; want A 0.5 true", sym, frac, ok)
 	}
@@ -152,6 +164,11 @@ func TestColumns(t *testing.T) {
 	if want := fmt.Sprintf("%+.1f", (cumShare-med)/floor); got["cum_share_z"] != want {
 		t.Errorf("cum_share_z = %q, want %s", got["cum_share_z"], want)
 	}
+	// concentration_day: same window and slice as cum_share — basket {A,B},
+	// A carries $300 counted + $100 cross = $400 of $500.
+	if got["concentration_day"] != "A 80%" {
+		t.Errorf("concentration_day = %q, want A 80%%", got["concentration_day"])
+	}
 	// A row rendered for an unknown basket gaps the z (no profile).
 	rcQuiet := &devview.RowCtx{Basket: &devview.BasketRow{Name: "nope", States: states(table, "D")}, AtSec: start + 65}
 	for _, c := range cols {
@@ -167,7 +184,7 @@ func TestColumns(t *testing.T) {
 	for _, c := range cols {
 		out := c.Cell(rcPre)
 		switch c.Name {
-		case "flow_share", "concentration", "cum_share", "cum_share_typ", "cum_share_z":
+		case "flow_share", "concentration", "cum_share", "cum_share_typ", "cum_share_z", "concentration_day":
 			if out != "·" {
 				t.Errorf("%s on empty window = %q, want gap", c.Name, out)
 			}
@@ -188,8 +205,12 @@ func TestTraderColumns(t *testing.T) {
 			CumDays: 20, MedianCumShare: 0.1, SigmaCumShare: 0}
 		floors.Rows[i] = profile.FloorRow{MinuteOfDay: session.OpenMinute + i, SigmaFloorCumShare: 0.125}
 	}
-	cols, rank, footer := TraderColumns(store, states(table, "A", "B", "C"), map[string]*profile.ShareProfile{"x": prof}, floors)
-	wantOrder := []string{"cum_share", "cum_share_typ", "cum_share_z", "relative_vol", "concentration"}
+	// Stub breadth column (the real one is composed by the command from
+	// internal/breadth); its Legend must be cleared by TraderColumns.
+	breadthStub := devview.Column{Name: "breadth", Width: 7, Legend: "should be cleared",
+		Cell: func(rc *devview.RowCtx) string { return "1/2" }}
+	cols, rank, footer := TraderColumns(store, states(table, "A", "B", "C"), map[string]*profile.ShareProfile{"x": prof}, floors, breadthStub)
+	wantOrder := []string{"cum_share", "cum_share_typ", "cum_share_z", "relative_vol", "breadth", "concentration", "concentration_day"}
 	for i, w := range wantOrder {
 		if cols[i].Name != w {
 			t.Fatalf("column %d = %s, want %s", i, cols[i].Name, w)
@@ -205,6 +226,9 @@ func TestTraderColumns(t *testing.T) {
 	}
 	if !strings.Contains(footer, "·") {
 		t.Error("footer does not define the gap glyph")
+	}
+	if !strings.Contains(footer, "SPY (top line)") {
+		t.Error("footer does not define the clock-line SPY status")
 	}
 	// Scope law: statements of measurement only — spot-guard the obvious
 	// violations in rendered trader-facing text.

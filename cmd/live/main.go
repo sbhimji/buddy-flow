@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"buddy-flow/internal/breadth"
 	"buddy-flow/internal/bucket"
 	"buddy-flow/internal/capture"
 	"buddy-flow/internal/devview"
@@ -97,10 +98,15 @@ func main() {
 		if err != nil {
 			fatal(fmt.Errorf("%w (roll profiles first: go run ./cmd/profiles -days 20)", err))
 		}
-		cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors)
+		bc, err := breadth.New(store, table)
+		if err != nil {
+			fatal(err)
+		}
+		cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, bc.Column(true))
 		dv.SetColumns(cols)
 		dv.SetRank(rank)
 		dv.SetFooter(footer)
+		dv.SetStatus(bc.Status)
 		p.SetObserver(dv) // before Run starts (pipeline contract)
 	} else {
 		p.SetObserver(store) // before Run starts (pipeline contract)

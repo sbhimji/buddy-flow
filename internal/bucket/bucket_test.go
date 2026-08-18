@@ -267,3 +267,39 @@ func TestDeriveMinute(t *testing.T) {
 		t.Error("non-aligned minuteSec accepted")
 	}
 }
+
+// TestFirstLastTradePrice covers the 3.2 price readers: earliest/latest
+// traded second's last price, window bounds, early exit on empty spans, and
+// that quote-only seconds don't count as traded.
+func TestFirstLastTradePrice(t *testing.T) {
+	s, nvda, spy := twoSymbolStore(t)
+	// NVDA sec 100 last print (by SIP ts) is the dup avg-price 50.05 — raw
+	// tape, unfiltered by class (mini-spec 3.2 B2, deliberate).
+	if p, ok := s.FirstTradePrice(nvda, 90, 200); !ok || p != 50.05 {
+		t.Errorf("first = %v, %v; want 50.05, true", p, ok)
+	}
+	if p, ok := s.LastTradePrice(nvda, 90, 200); !ok || p != 50.20 {
+		t.Errorf("last = %v, %v; want 50.20 (sec 101), true", p, ok)
+	}
+	// Window end exclusive: [90, 101) sees only sec 100.
+	if p, ok := s.LastTradePrice(nvda, 90, 101); !ok || p != 50.05 {
+		t.Errorf("last in [90,101) = %v, %v; want 50.05, true", p, ok)
+	}
+	// Empty span: no fake price.
+	if _, ok := s.FirstTradePrice(nvda, 200, 300); ok {
+		t.Error("first on empty span reported ok")
+	}
+	if _, ok := s.LastTradePrice(nvda, 0, 100); ok {
+		t.Error("last on pre-data span reported ok")
+	}
+	// SPY sec 100 traded; its quote-only bucket seconds must not count:
+	// quotes at sec 100 ride the same second here, so probe a quote-only
+	// second explicitly.
+	s.ObserveQuote(&ingest.Quote{State: spy, SipTs: 150_000_000_000})
+	if _, ok := s.FirstTradePrice(spy, 150, 151); ok {
+		t.Error("quote-only second reported a trade price")
+	}
+	if p, ok := s.FirstTradePrice(spy, 90, 200); !ok || p != 600.00 {
+		t.Errorf("spy first = %v, %v; want 600, true", p, ok)
+	}
+}

@@ -92,16 +92,19 @@ func CumShareZ(share float64, shareOK bool, prof *profile.ShareProfile, floors *
 	return zguard.Z(share, row.MedianCumShare, row.SigmaCumShare, fr.SigmaFloorCumShare)
 }
 
-// Concentration returns the basket's top member by counted $vol over
-// [fromSec, toSec) and its fraction of the basket total. Ties break
-// first-wins over the given order (members arrive sorted, so alphabetical
-// — determinism, D5). ok=false when the basket traded nothing: "X 0%"
-// would be a fake statement.
-func Concentration(store *bucket.Store, basket []*ingest.SymbolState, fromSec, toSec int64) (sym string, frac float64, ok bool) {
+// Concentration returns the basket's top member by $vol in the given
+// print-inclusion slice over [fromSec, toSec) and its fraction of the
+// basket total. The slice matches the family the window describes:
+// profile.Counted for the completed-minute stat (A8),
+// profile.CountedWithAuctions for the since-open stat (it shares the cum
+// family's window and story). Ties break first-wins over the given order
+// (members arrive sorted, so alphabetical — determinism, D5). ok=false
+// when the basket traded nothing: "X 0%" would be a fake statement.
+func Concentration(store *bucket.Store, basket []*ingest.SymbolState, slice func(bucket.Bucket) (shares, dollars float64), fromSec, toSec int64) (sym string, frac float64, ok bool) {
 	var total, top float64
 	for _, st := range basket {
 		b := store.Window(st, fromSec, toSec)
-		_, d := profile.Counted(b)
+		_, d := slice(b)
 		total += d
 		if d > top {
 			top, sym = d, st.Symbol
@@ -353,11 +356,42 @@ func (c *cells) cumShareZCol(style bool) devview.Column {
 func (c *cells) concentrationCol() devview.Column {
 	return devview.Column{Name: "concentration", Width: 13, Cell: func(rc *devview.RowCtx) string {
 		cur := session.MinuteStart(rc.AtSec * 1e9)
-		sym, frac, ok := Concentration(c.store, rc.Basket.States, cur-60, cur)
+		sym, frac, ok := Concentration(c.store, rc.Basket.States, profile.Counted, cur-60, cur)
 		if !ok {
 			return gap
 		}
 		return fmt.Sprintf("%s %.0f%%", sym, 100*frac)
+	}}
+}
+
+// concentrationDayCol is the session-long concentration (trader-view
+// follow-up, owner-requested 2026-08-16): top member's share of the
+// basket's $vol over the SAME window and slice as cum_share — since open
+// through the completed minute, auction-inclusive — so "who carried this
+// basket today" reconciles with the since-open story it sits next to. It
+// reads the cum snapshot (one store pass shared across all rows of a
+// render) rather than rescanning per row; ties break first-wins over the
+// sorted member order, same as Concentration (D5 determinism).
+func (c *cells) concentrationDayCol() devview.Column {
+	return devview.Column{Name: "concentration_day", Width: 17, Cell: func(rc *devview.RowCtx) string {
+		from, to, _, ok := c.cumWindow(rc.AtSec)
+		if !ok {
+			return gap
+		}
+		c.cumWin.get(c.store, c.union, profile.CountedWithAuctions, from, to, rc.AtSec)
+		var total, top float64
+		var sym string
+		for _, st := range rc.Basket.States {
+			d := c.cumWin.dollars[st]
+			total += d
+			if d > top {
+				top, sym = d, st.Symbol
+			}
+		}
+		if total == 0 {
+			return gap // "X 0%" would be a fake statement
+		}
+		return fmt.Sprintf("%s %.0f%%", sym, 100*top/total)
 	}}
 }
 
@@ -401,6 +435,7 @@ func Columns(store *bucket.Store, union []*ingest.SymbolState, shares map[string
 		c.cumShareCol(),
 		c.cumShareTypCol(),
 		c.cumShareZCol(false),
+		c.concentrationDayCol(),
 	}
 }
 
@@ -410,22 +445,27 @@ func Columns(store *bucket.Store, union []*ingest.SymbolState, shares map[string
 // recommendation language (scope law). It travels with the trader column
 // set (TraderColumns returns it; the dev view gets no footer) and is a
 // constant, so Render stays a pure function of (store state, second).
-const TraderFooter = `cum_share     = % of all dollars traded across our tracked universe since the open that went through this basket (includes opening auction)
-cum_share_typ = what that % typically is by this time of day, median of the last 20 sessions
-cum_share_z   = how unusual today is vs those 20 days, in σ — ±1 ordinary, ±2 notable (highlighted), ±3 rare
-relative_vol  = last full minute's dollars vs the typical for that exact minute — 1.0 = normal pace
-concentration = the single stock carrying the largest share of this basket's dollars last minute
-·             = no basis for comparison — never a zero
+const TraderFooter = `cum_share         = % of all dollars traded across our tracked universe since the open that went through this basket (includes opening auction)
+cum_share_typ     = what that % typically is by this time of day, median of the last 20 sessions
+cum_share_z       = how unusual today is vs those 20 days, in σ — ±1 ordinary, ±2 notable (highlighted), ±3 rare
+relative_vol      = last full minute's dollars vs the typical for that exact minute — 1.0 = normal pace
+breadth           = how many of this basket's stocks have beaten SPY since the open for 3 straight minutes (by more than 0.10%) — 8/9 is a crowd, 1/9 is one stock's story; bold green when over 70% of the basket is outperforming, bold red when over 70% is underperforming
+SPY (top line)    = the index's own price change since the open, the reference breadth is measured against — green above +0.10%, red below −0.10%, yellow in between
+concentration     = the single stock carrying the largest share of this basket's dollars last minute
+concentration_day = the single stock carrying the largest share of this basket's dollars since the open (incl. opening auction)
+·                 = no basis for comparison — never a zero
 `
 
 // TraderColumns composes the trader-view-v0 set: the since-open story,
-// one instantaneous pulse (relative_vol), and concentration — sorted by
-// the returned rank (cum z descending, gaps last). No per-minute share z:
-// it flickers; the cumulative z carries the story. The returned footer
-// (TraderFooter) defines every column in plain English; the clock-line
-// legends the columns would otherwise carry are dropped — the footer
-// explains them, the clock line just names the minutes.
-func TraderColumns(store *bucket.Store, union []*ingest.SymbolState, shares map[string]*profile.ShareProfile, floors *profile.Floors) (cols []devview.Column, rank func(rc *devview.RowCtx) (float64, bool), footer string) {
+// one instantaneous pulse (relative_vol), breadth (composed by the caller
+// from internal/breadth — this package stays ignorant of its internals),
+// and both concentrations — sorted by the returned rank (cum z descending,
+// gaps last). No per-minute share z: it flickers; the cumulative z carries
+// the story. The returned footer (TraderFooter) defines every column in
+// plain English; the clock-line legends the columns would otherwise carry
+// are dropped — the footer explains them, the clock line just names the
+// minutes.
+func TraderColumns(store *bucket.Store, union []*ingest.SymbolState, shares map[string]*profile.ShareProfile, floors *profile.Floors, breadthCol devview.Column) (cols []devview.Column, rank func(rc *devview.RowCtx) (float64, bool), footer string) {
 	c := &cells{store: store, union: union, shares: shares, floors: floors}
 	relVol := devview.Column{Name: "relative_vol", Width: 12,
 		Cell: func(rc *devview.RowCtx) string {
@@ -437,11 +477,14 @@ func TraderColumns(store *bucket.Store, union []*ingest.SymbolState, shares map[
 		}}
 	cum := c.cumShareCol()
 	cum.Legend = ""
+	breadthCol.Legend = "" // the footer explains it; trader clock line stays bare
 	return []devview.Column{
 		cum,
 		c.cumShareTypCol(),
 		c.cumShareZCol(true),
 		relVol,
+		breadthCol,
 		c.concentrationCol(),
+		c.concentrationDayCol(),
 	}, c.cumZ, TraderFooter
 }

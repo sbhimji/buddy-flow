@@ -200,6 +200,27 @@ func TestSetFooter(t *testing.T) {
 	}
 }
 
+// TestSetStatus: a composed view's status lands on the clock line; the
+// default view renders none; empty status renders nothing.
+func TestSetStatus(t *testing.T) {
+	v, atSec := newTestView(t)
+	base := strings.Split(v.Render(atSec), "\n")[0]
+	v.SetStatus(func(at int64) string {
+		if at != atSec {
+			t.Errorf("status got atSec %d, want %d", at, atSec)
+		}
+		return "SPY +0.42% since open"
+	})
+	got := strings.Split(v.Render(atSec), "\n")[0]
+	if want := base + "   SPY +0.42% since open"; got != want {
+		t.Errorf("clock line = %q, want %q", got, want)
+	}
+	v.SetStatus(func(int64) string { return "" })
+	if got := strings.Split(v.Render(atSec), "\n")[0]; got != base {
+		t.Errorf("empty status altered clock line: %q", got)
+	}
+}
+
 // TestNewRejectsMissingProfile: a member without a profile must fail loudly
 // at construction, not render fake-zero baselines.
 func TestNewRejectsMissingProfile(t *testing.T) {

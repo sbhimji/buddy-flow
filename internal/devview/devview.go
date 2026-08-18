@@ -101,6 +101,7 @@ type View struct {
 	columns    []Column
 	rank       func(rc *RowCtx) (float64, bool) // optional row order (SetRank)
 	footer     string                           // optional fixed block below the table (SetFooter)
+	status     func(atSec int64) string         // optional clock-line status (SetStatus)
 	baseLegend bool                             // clock line carries the default columns' legend
 	clockNs    atomic.Int64                     // max SIP ts observed; the replayed session clock
 }
@@ -154,6 +155,12 @@ func (v *View) SetRank(rank func(rc *RowCtx) (float64, bool)) { v.rank = rank }
 // renders nothing). A fixed string keeps Render a pure function of
 // (store state, second).
 func (v *View) SetFooter(footer string) { v.footer = footer }
+
+// SetStatus installs a clock-line status: the returned string (ANSI
+// allowed; empty renders nothing) is appended to the clock line each
+// render. The function must be pure in (store state, atSec) — Render's
+// determinism contract extends to it. Nil (the default) renders nothing.
+func (v *View) SetStatus(status func(atSec int64) string) { v.status = status }
 
 // ObserveTrade delegates to the store and advances the session clock.
 func (v *View) ObserveTrade(t *ingest.Trade) {
@@ -300,6 +307,11 @@ func (v *View) Render(atSec int64) string {
 	for _, c := range v.columns {
 		if c.Legend != "" {
 			sb.WriteString("; " + c.Legend)
+		}
+	}
+	if v.status != nil {
+		if s := v.status(atSec); s != "" {
+			sb.WriteString("   " + s)
 		}
 	}
 	sb.WriteByte('\n')

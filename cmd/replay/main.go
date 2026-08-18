@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"buddy-flow/internal/breadth"
 	"buddy-flow/internal/bucket"
 	"buddy-flow/internal/devview"
 	"buddy-flow/internal/feed"
@@ -160,15 +161,23 @@ func main() {
 			fmt.Fprintf(os.Stderr, "%v (rebuild with cmd/profiles?)\n", err)
 			os.Exit(1)
 		}
+		bc, err := breadth.New(store, table)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		if *viewMode == "trader" {
-			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors)
+			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, bc.Column(true))
 			dv.SetColumns(cols)
 			dv.SetRank(rank)
 			dv.SetFooter(footer)
+			dv.SetStatus(bc.Status)
 		} else {
 			for _, c := range flowshare.Columns(store, unionStates, shares, floors) {
 				dv.Register(c)
 			}
+			dv.Register(bc.Column(false))
+			dv.Register(bc.DetailColumn())
 		}
 	}
 	switch { // before Run starts (pipeline contract)
@@ -208,7 +217,11 @@ func main() {
 			fmt.Printf("!! processed=%d != submitted=%d — pipeline lost messages\n", p.Processed.Load(), submitted)
 			os.Exit(1)
 		}
-		reportState(table, splitCSV(*nbboSyms))
+		if *view {
+			reportState(table, nil, false) // table is the product; totals only
+		} else {
+			reportState(table, splitCSV(*nbboSyms), true)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "capture replay failed (stats above are partial): %v\n", err)
 			os.Exit(3) // no bucket write: a partial file at the target path would masquerade as a session
@@ -326,10 +339,10 @@ func main() {
 		// Quotes are state-building: a -from window truncates each symbol's
 		// quote history, so the "final book" is an artifact, not an "as of"
 		// (review finding #4). Suppress rather than print a wrong book.
-		reportState(table, nil)
+		reportState(table, nil, true)
 		fmt.Printf("nbbo: suppressed (-from truncates quote history; books would not be \"as of\" any instant)\n")
 	} else {
-		reportState(table, splitCSV(*nbboSyms))
+		reportState(table, splitCSV(*nbboSyms), true)
 	}
 
 	if inputErr {
@@ -467,17 +480,21 @@ func writeBuckets(store *bucket.Store, path string) {
 	reportTripwire(store)
 }
 
-// reportState prints universe totals, the busiest symbols, and (when
-// requested) final NBBO for the spot-check symbols. Shared by the flat-file
-// and capture-replay paths so both report identically — done-when #2 of
-// mini-spec 1.2 compares exactly these lines across runs.
-func reportState(table *ingest.Table, nbboSyms []string) {
+// reportState prints universe totals, (when top is set) the busiest
+// symbols, and (when requested) final NBBO for the spot-check symbols.
+// Shared by the flat-file and capture-replay paths so both report
+// identically — done-when #2 of mini-spec 1.2 compares exactly these lines
+// across runs. -view runs pass top=false and no nbboSyms (owner request
+// 2026-08-16): the table is the product there and the spot-check lines are
+// clutter; the universe-totals line stays everywhere — it is the
+// lost-message reconciliation evidence.
+func reportState(table *ingest.Table, nbboSyms []string, top bool) {
 	var uTrades, uQuotes, regT, regQ int64
 	type symCount struct {
 		sym string
 		n   int64
 	}
-	var top []symCount
+	var busiest []symCount
 	for _, s := range table.All() {
 		t, q := s.Trades.Load(), s.Quotes.Load()
 		uTrades += t
@@ -485,23 +502,25 @@ func reportState(table *ingest.Table, nbboSyms []string) {
 		regT += s.SeqRegressTrades.Load()
 		regQ += s.SeqRegressQuotes.Load()
 		if t+q > 0 {
-			top = append(top, symCount{s.Symbol, t + q})
+			busiest = append(busiest, symCount{s.Symbol, t + q})
 		}
 	}
 	fmt.Printf("universe totals: trades=%d quotes=%d  seq-regressions: trades=%d quotes=%d  active-symbols=%d/%d\n",
-		uTrades, uQuotes, regT, regQ, len(top), table.Len())
+		uTrades, uQuotes, regT, regQ, len(busiest), table.Len())
 
-	sort.Slice(top, func(i, j int) bool {
-		if top[i].n != top[j].n {
-			return top[i].n > top[j].n
+	if top {
+		sort.Slice(busiest, func(i, j int) bool {
+			if busiest[i].n != busiest[j].n {
+				return busiest[i].n > busiest[j].n
+			}
+			return busiest[i].sym < busiest[j].sym // tie-break for deterministic output
+		})
+		fmt.Printf("top symbols by messages:")
+		for i := 0; i < len(busiest) && i < 10; i++ {
+			fmt.Printf("  %s=%d", busiest[i].sym, busiest[i].n)
 		}
-		return top[i].sym < top[j].sym // tie-break for deterministic output
-	})
-	fmt.Printf("top symbols by messages:")
-	for i := 0; i < len(top) && i < 10; i++ {
-		fmt.Printf("  %s=%d", top[i].sym, top[i].n)
+		fmt.Println()
 	}
-	fmt.Println()
 
 	for _, sym := range nbboSyms {
 		st := table.Lookup(sym)

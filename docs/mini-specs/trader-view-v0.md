@@ -18,10 +18,11 @@ share of the tracked tape since open vs typical by this time of day —
 crosses count; the closing cross stays outside the `[open, close)` window),
 `relative_vol` (completed minute vs matched-minute baseline, Counted slice
 — per-minute columns exclude crosses; the two slices on one screen are
-deliberate and the footer documents it), and `concentration` (top member's
-% of basket $vol, completed minute). No per-minute share z (flickers), no
-dev plumbing columns, no cum $vol (owner call — revisit; a
-typical-cum-$vol baseline would need the D7 treatment).
+deliberate and the footer documents it), `breadth` (T7), `concentration`
+(top member's % of basket $vol, completed minute), and `concentration_day`
+(T8). No per-minute share z (flickers), no dev plumbing columns, no cum
+$vol (owner call — revisit; a typical-cum-$vol baseline would need the D7
+treatment).
 
 ## Decisions
 
@@ -63,6 +64,42 @@ typical-cum-$vol baseline would need the D7 treatment).
   (store state, second). The clock line keeps naming the completed and
   in-progress minutes but drops the per-column legend clauses — the footer
   explains the columns now.
+
+- **T7 — Breadth column (added 2026-08-16, owner request).** Story 3.2
+  pulled forward: `breadth` = persistent outperformers vs SPY since open,
+  raw fraction over full membership. All decisions, defaults, and the F18
+  correlation-blindness caveat live in
+  `docs/mini-specs/3.2-breadth.md`; home `internal/breadth`; the trader
+  set receives the composed column via a `TraderColumns` parameter (T5
+  posture — flowshare stays ignorant of breadth internals). The dev view
+  registers `breadth` plus the three-state `breadth_detail`.
+  **Highlight (owner request, same evening):** the trader cell renders
+  bold green when MORE than 70% of full membership is persistently
+  outperforming, bold red when more than 70% is persistently
+  underperforming (the de-grossing fingerprint — symmetric per T2's
+  measurement-color posture); `breadth.HighlightFrac = 0.70`, a
+  ledger-tunable default like SignificantZ. Dev view stays plain.
+
+- **T8 — Session-long concentration (added 2026-08-16, owner request).**
+  `concentration_day` = top member's share of basket $vol over the SAME
+  window and slice as `cum_share` (since open through completed minute,
+  auction-inclusive) so it reconciles with the since-open story it sits
+  next to; reads the shared cum snapshot, no extra store pass. Per-minute
+  `concentration` unchanged (Counted slice). Also on the dev view.
+
+- **T9 — SPY status on the clock line (added 2026-08-16, owner request).**
+  Breadth is measured relative to SPY, so the index's own since-open move
+  prints once per render on the clock line: `SPY +0.42% since open`,
+  through the end of the last completed minute (reconciles with the
+  breadth states by construction — same anchor/price machinery, 3.2 B2/B3
+  caveats apply). Colored by the SAME ±10 bps dead-band the member states
+  use: green above, red below, yellow inside — a statement of the index's
+  own measurement, never a recommendation. Gap before the first completed
+  minute (so it appears at 09:31, two minutes before breadth). New
+  `devview.SetStatus` seam (same posture as SetFooter: travels with the
+  composed view, pure in (store state, second), colored bytes are
+  deterministic bytes); computed by `breadth.Calc.Status`; trader mode
+  only; the footer defines it.
 
 ## Done when
 

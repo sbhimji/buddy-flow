@@ -32,6 +32,44 @@ trader's; take it to him when this is picked up.
 earnings = per-ticker), consumed by the profile builder and stamped into the nightly
 ledger; then remove the trading-days-inferred-from-data shortcut in 2.1.
 
+## ⚑ PRIORITY — Offload capture + bucket files to S3 (disk runway ≈ 1 month)
+
+**Logged:** 2026-08-17 (owner request, after the first full 03:55–20:00 extended-hours
+session). **Lands in:** a nightly job after session close (natural sibling of the
+cancels/corrections reconciliation job, this file).
+
+**Why priority — the arithmetic:** extended-hours capture measured 2026-08-17 at
+**10 GB/day** stream + **0.44 GB/day** buckets; the machine had **231 GB free** that
+evening (with 76 GB of flat-files and 16 GB of captures already on disk). That is
+roughly a month of trading days of runway. Must land — or at least interim manual
+offload must start — by mid-September 2026.
+
+**Owner's rationale recorded:** archived captures/buckets are needed for profile
+creation, which is a nightly batch with no speed requirement — cold storage is fine.
+One caveat to carry: replay is also the development environment and the acceptance
+instrument (stories close on replayed data), so *recent* sessions are a hot working
+set — the design is a local hot window + S3 as the archive of record, everything
+retrievable on demand, not "S3 only."
+
+**Shape when picked up:**
+- Nightly, after the live job exits: compress and upload the day's
+  `data/capture/<date>/` (stream + manifest) and `data/buckets/<date>.csv`.
+  Gzip first — the stream is JSON and compresses hard, and `cmd/replay` already
+  reads `stream.jsonl.gz`; verify the bucket reader's gz handling before assuming
+  the same there.
+- **Verify before any delete:** checksum/size the uploaded object against local;
+  the capture is the canonical record — a failed upload must never cost it. Local
+  deletion only after verified upload AND falling out of the hot window.
+- Hot window: keep at least the 20-day profile lookback of buckets local (or make
+  the profile builder S3-capable), plus recent captures for replay; §6 reference-day
+  sessions (SNDK-class days) are pinned — archived but also kept easy to re-pull.
+- Storage class: uploads land in Standard, lifecycle to IA/Glacier after the hot
+  window; retrieval latency is acceptable per the owner's no-speed-need call.
+- New dependency: AWS credentials on the capture machine; keep them out of the repo
+  (same posture as MASSIVE_API_KEY in `.env`).
+- Easy immediate win, even before the job exists: the 76 GB of static flat-files
+  can be uploaded and cleared manually today — nothing writes them nightly.
+
 ## Baseline estimator reevaluation — median/MAD choice, σ-floor fraction, log-scale z (calibration refinement)
 
 **Logged:** 2026-08-15 (2.2 close discussion). **Lands in:** 2.1/2.2 as a calibration
@@ -91,6 +129,41 @@ never heard named may exist in his mental model of the product.
 **The ask when picked up:** get his layer list or five minutes walking through it;
 reconcile against §-numbering; capture the Layer 8 definition **before** scoping or
 building anything called leadership-divergence.
+
+## Volume breadth — how many members are up ON volume (owner request, 2026-08-16)
+
+**Logged:** 2026-08-16 (owner request during the 3.2 breadth walkthrough). **Lands in:**
+a 3.2 extension story (dev view first, trader view if it earns the seat); feeds 3.8
+Glow like the other participation reads.
+
+**What:** 3.2's breadth counts members up on *price* vs SPY; the §2.5 rationale — "one
+stock up is news; nine up on volume is money" — really wants the conjunction. Two
+member-level counts to build, then the combined read:
+
+1. **Unusual-volume count:** members whose own counted $vol is running above their
+   matched-minute baseline (per-ticker profiles already store median $vol per minute) —
+   e.g. member rvol > k over the last completed minute, or over a short trailing window
+   to damp single-minute lumps. k is a decision (default suggestion 1.5–2.0, ledger-tuned).
+2. **Up-on-volume count:** members passing BOTH gates — price ↑ per 3.2's three-state
+   (dead-band + persistence) AND unusual volume per (1). That is the institutional-
+   fingerprint refinement: `9 up / 7 of them on volume` reads very differently from
+   `9 up / 1 on volume` (index drift).
+
+**Design notes for pickup:**
+- Per-member rvol needs only existing per-ticker profiles + the bucket store — no new
+  storage. But a **since-open cumulative** variant needs a per-ticker cumulative-volume
+  baseline, which does NOT exist and cannot be summed from per-minute medians (medians
+  don't commute — same reason D7 got its own family). If the cumulative variant is
+  wanted, it needs the D7 treatment at ticker level; start with the per-minute/trailing
+  variant and see if it satisfies.
+- Thin members: rvol on a low-$vol name is noisy and its baseline can be near zero —
+  reuse 2.1's thin-name posture (median 0 → no basis, member unmeasured, folds to the
+  middle; never a fake "unusual").
+- Render suggestion: dev-view detail first (`7$ 2·` alongside `breadth_detail`), raw
+  fractions over full membership like 3.2 (F17 small-basket honesty). Correlation
+  caveat carries over (F18) — ETF arbitrage lifts member volume mechanically too.
+- Thresholds (k, window, whether persistence applies to the volume gate) are defaults
+  to record in the mini-spec and tune at the nightly ledger (6.5).
 
 ## Closing-cross inclusion in cumulative share (deferred by design, 2026-08-16)
 
@@ -364,3 +437,81 @@ refreshes carry fresh timestamps, a naive quote-staleness metric would read a st
 book as fresh. Also carried from the same reconciliation: a residual unexplained
 vendor-side surplus on a few active names (CORZ +57, CSCO +25, QQQ +16; ≤0.03% each,
 zero reconnects that day) — recheck once the re-broadcast question is settled.
+
+## Trader view as a separate process — follow-mode replay (owner request; interim risk in place)
+
+**Logged:** 2026-08-16 (premarket-capture scheduling discussion). **Lands in:**
+`feed.StreamCapture` + a `-follow` flag on `cmd/replay`; small story, mini-spec first.
+
+**What:** let the trader view *attach* to a running capture instead of owning it.
+`cmd/replay -capture <stream.jsonl> -follow -view -view-mode trader` tails the growing
+capture file: at EOF, poll for new bytes instead of exiting, and treat a torn last
+line as "not finished yet" (retry) rather than end-of-stream — the reader already
+tolerates torn tails on finished files (tested), so follow mode extends that. Same
+decoder, pipeline, renderer as today's replay view; no new surfaces.
+
+**Why:** the live capture is now scheduled headless via launchd at 02:55 CT for
+premarket coverage, and the view runs *inside* `cmd/live` — one process owns socket,
+capture file, pipeline, and table. That weld means (a) you can't start a view without
+either owning the capture or violating one-instance-per-date, and (b) with `-view`
+passed to the scheduled job (the interim state, accepted 2026-08-16 because profiles
+are known-rolled), `LoadBaselines` failing at launch kills the *whole day's capture*
+over a display dependency. Follow mode makes the view a pure reader: kill/restart it
+freely, run dev and trader modes side by side, load baselines fresh at view start —
+capture never knows it exists.
+
+**Acceptance sketch for the mini-spec:** viewing a capture mid-write shows the same
+table as a normal replay of the same prefix; killing/restarting the view leaves the
+capture process and file untouched; a view started hours into the session catches up
+and goes live; works against the launchd-written file while that job runs.
+
+**When landed:** remove `-view` from `~/Library/LaunchAgents/com.buddyflow.live.plist`
+(the interim coupling is commented there) so the scheduled job returns to headless
+capture-only, and watch mornings via the follow view instead.
+
+## Trader self-serve basket editing (LOW priority — owner request)
+
+**Logged:** 2026-08-16 (owner request). **Lands in:** post-v1; touches the baskets
+config surface only, never the engine.
+
+**What:** let the trader define and edit baskets himself — add/remove members, create
+or retire baskets — without hand-editing `morning-tape-baskets-v2.json` or going
+through engineering. Could be as thin as a validated edit workflow (edit → validate →
+commit) or as rich as a small editing UI; the thin version first.
+
+**Why the architecture already permits it:** the design invariants were built for
+exactly this — the engine reads trader-owned JSON with hot-reload, profiles are stored
+per ticker (never per basket) so membership edits cannot corrupt history, and basket
+baselines are summed from member profiles at read time.
+
+**Gated on:** the universe-loader hardening entry (this file) — self-serve editing
+without validation (orphan tickers, empty baskets, duplicates, unknown symbols) and
+without effective-date stamping turns every trader edit into a silent replay-history
+hazard. Those must land first. D1 ownership is unchanged: this gives the owner a safer
+pen, it does not move the decision.
+
+## Multiple named basket configurations (LOW priority — owner request)
+
+**Logged:** 2026-08-16 (owner request, alongside self-serve basket editing above).
+**Lands in:** post-v1; extends the baskets config schema and every view's notion of
+"the basket map".
+
+**What:** save several complete basket configurations and view the universe through
+one at a time — e.g. config 1 = a classic sector/industry taxonomy, config 2 = the
+current AI/tech-thematic map. Same tickers, different groupings; switching configs
+re-slices the display without touching stored data.
+
+**Why it's cheap at the storage layer:** the per-ticker-profiles invariant means
+baselines, buckets, and 1-second storage are all config-agnostic — a configuration is
+purely a read-time grouping, so no baseline rebuild per config.
+
+**Real costs when picked up:**
+- Schema: a config becomes a first-class named object; effective-date stamping (already
+  pending in the loader-hardening entry) gains a config dimension, and capture/replay
+  must record which config was active so a replayed session renders as it was seen.
+- Anything derived from basket *pairs* is per-config: disjoint-set narrative baselines
+  (story 3.7 / A6) and any pair suppression lists must be computed per configuration.
+- Ledger entries (6.5) grade sentences that named baskets — grading only makes sense
+  against the config that produced them; stamp config identity into the ledger.
+- Trader decisions: whether switching is live-session or pre-open only, and whether
+  benchmarks/bond-gate groups are shared across configs or per-config.

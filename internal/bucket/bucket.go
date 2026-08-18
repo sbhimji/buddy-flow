@@ -163,6 +163,41 @@ func (s *Store) Window(st *ingest.SymbolState, fromSec, toSec int64) Bucket {
 	return out
 }
 
+// FirstTradePrice returns the last-print price of the EARLIEST second in
+// [fromSec, toSec) holding at least one print — the 3.2 since-open anchor.
+// 1-second resolution: within that second it is the second's last print by
+// SIP ts, not the day's literal first (for liquid names at the open, the
+// official-open admin print duplicates the auction price in the same
+// second, so the anchor lands on the cross). Raw tape, unfiltered by class
+// (mini-spec 3.2 B2). ok=false when no second in the window traded.
+func (s *Store) FirstTradePrice(st *ingest.SymbolState, fromSec, toSec int64) (float64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.buckets[st]
+	for sec := fromSec; sec < toSec; sec++ {
+		if b := m[sec]; b != nil && b.Trades > 0 {
+			return b.LastPrice, true
+		}
+	}
+	return 0, false
+}
+
+// LastTradePrice returns the last-print price of the LATEST second in
+// [fromSec, toSec) holding at least one print — "price as of" the window
+// end, at 1-second resolution, raw tape (see FirstTradePrice). ok=false
+// when no second in the window traded.
+func (s *Store) LastTradePrice(st *ingest.SymbolState, fromSec, toSec int64) (float64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.buckets[st]
+	for sec := toSec - 1; sec >= fromSec; sec-- {
+		if b := m[sec]; b != nil && b.Trades > 0 {
+			return b.LastPrice, true
+		}
+	}
+	return 0, false
+}
+
 // Unknown reports the tripwire: total prints carrying an unrecognized
 // condition ID, and per-ID counts (sorted by ID for deterministic output).
 func (s *Store) Unknown() (prints int64, ids []UnknownID) {

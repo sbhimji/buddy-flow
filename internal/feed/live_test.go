@@ -121,7 +121,7 @@ func TestSubscribeMessagesChunking(t *testing.T) {
 
 func TestCaptureRoundtripAndTornTail(t *testing.T) {
 	dir := t.TempDir()
-	w, err := capture.NewWriter(dir, "2026-01-02")
+	w, err := capture.NewWriter(dir, "2026-01-02", false)
 	if err != nil {
 		t.Fatal(err)
 	}

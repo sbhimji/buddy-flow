@@ -1,10 +1,13 @@
 // Command live runs the live market session: unconditional capture of every
 // raw frame (mini-spec 1.2 — deliberately no flag to disable it) plus the
 // full ingest pipeline (NBBO state, counters, the 1.4 bucket store). One
-// instance per session date — two appenders would corrupt the stream.
+// instance per session date — two appenders would corrupt the stream — and
+// a capture that already exists for today refuses to start without -resume
+// (deliberate mid-session restart) so accidental runs cannot pollute it.
 //
 //	go run ./cmd/live                      # session until 20:00 ET today
-//	go run ./cmd/live -until 16:30:00      # shorter session (smoke tests)
+//	go run ./cmd/live -resume              # continue today's capture after a mid-session stop
+//	go run ./cmd/live -until 16:30:00 -out /tmp/scratch  # smoke test (never the real -out)
 //
 // The API key comes from MASSIVE_API_KEY (environment, falling back to .env
 // at the repo root). Ctrl-C closes cleanly and writes the manifest.
@@ -12,6 +15,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -41,6 +45,7 @@ func main() {
 		url         = flag.String("url", "wss://socket.massive.com/stocks", "websocket endpoint")
 		view        = flag.Bool("view", false, "trader view (trader-view-v0): live basket table on stdout; operational logs divert to stderr (2>live.log)")
 		profilesDir = flag.String("profiles", "data/profiles", "profile directory for -view baselines")
+		resume      = flag.Bool("resume", false, "append to an existing capture for today (deliberate mid-session restart ONLY — never run two instances at once)")
 	)
 	flag.Parse()
 
@@ -61,6 +66,20 @@ func main() {
 	key := apiKey()
 	if key == "" {
 		fatal(fmt.Errorf("MASSIVE_API_KEY not set (env or .env)"))
+	}
+
+	// The resume decision is the WRITER's (made under its flock, no
+	// stat-then-open race); opening early — before the pipeline spins up —
+	// keeps the refusal loud and instant. This command only translates the
+	// refusal into flag advice.
+	w, err := capture.NewWriter(*outDir, date, *resume)
+	switch {
+	case errors.Is(err, capture.ErrExists):
+		fatal(fmt.Errorf("%w — pass -resume to deliberately continue today's capture, or -out <scratch dir> for a test run", err))
+	case errors.Is(err, capture.ErrLocked):
+		fatal(fmt.Errorf("%w — another live instance is running; one instance per session date", err))
+	case err != nil:
+		fatal(err)
 	}
 
 	syms, err := universe.Load(*basketsPath)
@@ -115,10 +134,6 @@ func main() {
 	go func() { p.Run(); close(pipeDone) }()
 	stopRender := startRenderLoop(dv)
 
-	w, err := capture.NewWriter(*outDir, date)
-	if err != nil {
-		fatal(err)
-	}
 	w.Control("start", fmt.Sprintf("universe=%d until=%s", len(syms), until.Format("15:04:05")))
 	fmt.Fprintf(logw, "capturing %d symbols (T+Q) to %s until %s ET\n", len(syms), capture.StreamPath(*outDir, date), until.Format("15:04:05"))
 

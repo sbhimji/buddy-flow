@@ -1,4 +1,5 @@
 .env
+bin/
 data/
 docs/temp/
 .DS_Store

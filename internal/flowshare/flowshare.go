@@ -510,6 +510,7 @@ cum_share_typ     = what that % typically is by this time of day, median of the 
 cum_share_z       = how unusual today is vs those 20 days, in σ — ±1 ordinary, ±2 notable (highlighted), ±3 rare (compares completed minutes, so it steps each minute while cum_share moves)
 relative_vol      = last full minute's dollars vs the typical for that exact minute — 1.0 = normal pace
 breadth           = how many of this basket's stocks have beaten SPY since the open for 3 straight minutes (by more than 0.10%) — 8/9 is a crowd, 1/9 is one stock's story; bold green when over 70% of the basket is outperforming, bold red when over 70% is underperforming
+up_on_vol         = of the stocks breadth counts as beating SPY, how many are also trading over 1.5× their usual dollar volume for that exact minute of day, 3 straight minutes — 7/9 is a crowd moving on size, 1/9 is price without it; index arbitrage lifts every stock's volume on macro days, so read it across baskets, never alone
 SPY (top line)    = the index's own price change since the open, the reference breadth is measured against — green above +0.10%, red below −0.10%, yellow in between
 concentration     = the single stock carrying the largest share of this basket's dollars last minute
 concentration_day = the single stock carrying the largest share of this basket's dollars since the open (incl. opening auction; live to this second)
@@ -517,15 +518,16 @@ concentration_day = the single stock carrying the largest share of this basket's
 `
 
 // TraderColumns composes the trader-view-v0 set: the since-open story,
-// one instantaneous pulse (relative_vol), breadth (composed by the caller
-// from internal/breadth — this package stays ignorant of its internals),
-// and both concentrations — sorted by the returned rank (cum z descending,
-// gaps last). No per-minute share z: it flickers; the cumulative z carries
-// the story. The returned footer (TraderFooter) defines every column in
-// plain English; the clock-line legends the columns would otherwise carry
-// are dropped — the footer explains them, the clock line just names the
-// minutes.
-func TraderColumns(store *bucket.Store, union []*ingest.SymbolState, shares map[string]*profile.ShareProfile, floors *profile.Floors, breadthCol devview.Column) (cols []devview.Column, rank func(rc *devview.RowCtx) (float64, bool), footer string) {
+// one instantaneous pulse (relative_vol), breadth and up_on_vol (composed
+// by the caller from internal/breadth — this package stays ignorant of
+// their internals; up_on_vol added at owner request 2026-08-17, mini-spec
+// 3.2b), and both concentrations — sorted by the returned rank (cum z
+// descending, gaps last). No per-minute share z: it flickers; the
+// cumulative z carries the story. The returned footer (TraderFooter)
+// defines every column in plain English; the clock-line legends the
+// columns would otherwise carry are dropped — the footer explains them,
+// the clock line just names the minutes.
+func TraderColumns(store *bucket.Store, union []*ingest.SymbolState, shares map[string]*profile.ShareProfile, floors *profile.Floors, breadthCol, upOnVolCol devview.Column) (cols []devview.Column, rank func(rc *devview.RowCtx) (float64, bool), footer string) {
 	c := &cells{store: store, union: union, shares: shares, floors: floors}
 	relVol := devview.Column{Name: "relative_vol", Width: 12,
 		Cell: func(rc *devview.RowCtx) string {
@@ -538,12 +540,14 @@ func TraderColumns(store *bucket.Store, union []*ingest.SymbolState, shares map[
 	cum := c.cumShareCol()
 	cum.Legend = ""
 	breadthCol.Legend = "" // the footer explains it; trader clock line stays bare
+	upOnVolCol.Legend = ""
 	return []devview.Column{
 		cum,
 		c.cumShareTypCol(),
 		c.cumShareZCol(true),
 		relVol,
 		breadthCol,
+		upOnVolCol,
 		c.concentrationCol(),
 		c.concentrationDayCol(),
 	}, c.cumZ, TraderFooter

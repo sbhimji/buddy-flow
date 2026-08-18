@@ -191,6 +191,11 @@ func main() {
 			}
 			dv.Register(bc.Column(false))
 			dv.Register(bc.DetailColumn())
+			// 3.2b volume breadth (dev view only per its mini-spec):
+			// reuses the view's already-loaded per-ticker profiles.
+			vc := breadth.NewVol(bc, store, dv.Profiles())
+			dv.Register(vc.UpOnVolColumn())
+			dv.Register(vc.VolDetailColumn())
 		}
 	}
 	switch { // before Run starts (pipeline contract)

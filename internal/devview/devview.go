@@ -138,6 +138,12 @@ func New(store *bucket.Store, table *ingest.Table, baskets []universe.Basket, pr
 // Register appends a metric column (the Phase 3 extension point).
 func (v *View) Register(c Column) { v.columns = append(v.columns, c) }
 
+// Profiles exposes the per-ticker profiles New already loaded (every
+// basket member, guaranteed present) so metric calcs outside the view can
+// share them instead of re-reading the directory. Read-only shared state —
+// callers must not mutate the map or the profiles.
+func (v *View) Profiles() map[string]*profile.Profile { return v.profiles }
+
 // SetColumns replaces the column set entirely — the trader view composes
 // its own set instead of extending the dev defaults. The default columns'
 // base legend goes with them; the new columns document themselves via

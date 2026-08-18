@@ -179,8 +179,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+		// 3.2b volume breadth: reuses the view's already-loaded
+		// per-ticker profiles.
+		vc := breadth.NewVol(bc, store, dv.Profiles())
 		if *viewMode == "trader" {
-			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, bc.Column(true))
+			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, bc.Column(true), vc.UpOnVolColumn())
 			dv.SetColumns(cols)
 			dv.SetRank(rank)
 			dv.SetFooter(footer)
@@ -191,9 +194,6 @@ func main() {
 			}
 			dv.Register(bc.Column(false))
 			dv.Register(bc.DetailColumn())
-			// 3.2b volume breadth (dev view only per its mini-spec):
-			// reuses the view's already-loaded per-ticker profiles.
-			vc := breadth.NewVol(bc, store, dv.Profiles())
 			dv.Register(vc.UpOnVolColumn())
 			dv.Register(vc.VolDetailColumn())
 		}

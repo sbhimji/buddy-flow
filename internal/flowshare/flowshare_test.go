@@ -276,12 +276,15 @@ func TestTraderColumns(t *testing.T) {
 			CumDays: 20, MedianCumShare: 0.1, SigmaCumShare: 0}
 		floors.Rows[i] = profile.FloorRow{MinuteOfDay: session.OpenMinute + i, SigmaFloorCumShare: 0.125}
 	}
-	// Stub breadth column (the real one is composed by the command from
-	// internal/breadth); its Legend must be cleared by TraderColumns.
+	// Stub breadth/up_on_vol columns (the real ones are composed by the
+	// command from internal/breadth); their Legends must be cleared by
+	// TraderColumns.
 	breadthStub := devview.Column{Name: "breadth", Width: 7, Legend: "should be cleared",
 		Cell: func(rc *devview.RowCtx) string { return "1/2" }}
-	cols, rank, footer := TraderColumns(store, states(table, "A", "B", "C"), map[string]*profile.ShareProfile{"x": prof}, floors, breadthStub)
-	wantOrder := []string{"cum_share", "cum_share_typ", "cum_share_z", "relative_vol", "breadth", "concentration", "concentration_day"}
+	upOnVolStub := devview.Column{Name: "up_on_vol", Width: 9, Legend: "should be cleared",
+		Cell: func(rc *devview.RowCtx) string { return "1/1" }}
+	cols, rank, footer := TraderColumns(store, states(table, "A", "B", "C"), map[string]*profile.ShareProfile{"x": prof}, floors, breadthStub, upOnVolStub)
+	wantOrder := []string{"cum_share", "cum_share_typ", "cum_share_z", "relative_vol", "breadth", "up_on_vol", "concentration", "concentration_day"}
 	for i, w := range wantOrder {
 		if cols[i].Name != w {
 			t.Fatalf("column %d = %s, want %s", i, cols[i].Name, w)

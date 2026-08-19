@@ -44,6 +44,18 @@ func Counted(b bucket.Bucket) (shares, dollars float64) {
 	return shares, dollars
 }
 
+// ExtendedHours is the extended-hours $vol lens: the NON_FLOW class, read
+// through a pre/post-market WINDOW (the caller's job — premarket-view-v0).
+// Within extended hours NON_FLOW is overwhelmingly Form T / Extended Hours
+// Sold OOS prints (conditions 12/13); the remaining NON_FLOW types are rare
+// admin/settlement records, mostly zero-volume. This is a session-scoped
+// read of the existing classes — the 0.3 table itself is untouched. NEVER
+// use this slice inside the regular session, where NON_FLOW is
+// settlement/admin noise, not flow.
+func ExtendedHours(b bucket.Bucket) (shares, dollars float64) {
+	return b.Class[classify.NonFlow].Shares, b.Class[classify.NonFlow].Dollars
+}
+
 // CountedWithAuctions is the auction-inclusive $vol slice: Counted plus the
 // cross classes (CROSS_OPEN, CROSS_REOPEN, CROSS_CLOSE). The D7 cumulative
 // share family computes on this slice (3.1 D7 amendment 2026-08-16):

@@ -33,6 +33,7 @@ import (
 	"buddy-flow/internal/feed"
 	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
+	"buddy-flow/internal/premarket"
 	"buddy-flow/internal/universe"
 )
 
@@ -125,6 +126,10 @@ func main() {
 		// per-ticker profiles.
 		vc := breadth.NewVol(bc, store, dv.Profiles())
 		cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, bc.Column(true), vc.UpOnVolColumn())
+		// Premarket columns + pre-open rank (premarket-view-v0): where
+		// extended-hours dollars concentrate before the bell; frozen at
+		// 09:30 as context for the day.
+		cols, rank, footer = premarket.New(store, unionStates).ExtendTrader(cols, rank, footer)
 		dv.SetColumns(cols)
 		dv.SetRank(rank)
 		dv.SetFooter(footer)

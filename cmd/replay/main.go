@@ -27,6 +27,7 @@ import (
 	"buddy-flow/internal/feed"
 	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
+	"buddy-flow/internal/premarket"
 	"buddy-flow/internal/session"
 	"buddy-flow/internal/universe"
 )
@@ -184,6 +185,10 @@ func main() {
 		vc := breadth.NewVol(bc, store, dv.Profiles())
 		if *viewMode == "trader" {
 			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, bc.Column(true), vc.UpOnVolColumn())
+			// Premarket columns + pre-open rank (premarket-view-v0) —
+			// same composition as cmd/live so replays reproduce the
+			// trader's screen.
+			cols, rank, footer = premarket.New(store, unionStates).ExtendTrader(cols, rank, footer)
 			dv.SetColumns(cols)
 			dv.SetRank(rank)
 			dv.SetFooter(footer)

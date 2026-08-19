@@ -321,11 +321,58 @@ test-guarded, so divergence is caught — but the test that reads real session d
 guard the production reader, not a sibling copy. Deferred at 1.3 close because replay
 runs on capture files (not CSV), leaving the CSV path with a single production consumer.
 
+## Premarket typ/z — baselines seeded from extended-hours aggs (renders from 07:00 ET)
+
+**Logged:** 2026-08-17 (owner request, same night premarket-view-v0 shipped).
+**Lands in:** the profile builder (new premarket family) + `internal/premarket`
+(two new columns). Follow-up to premarket-view-v0, which deliberately shipped raw
+magnitudes only.
+
+**What:** give the premarket columns their own matched-minute baseline — `pre_typ`
+(typical premarket share by this time) and `pre_z` — without waiting 20 sessions.
+
+**Scoping finding (2026-08-17 night, verified):** no aggs fetch is needed — the
+existing bucket corpus already covers premarket. The trades-only day files were
+built by replaying FULL-day flat files through the classifier, so they start at
+04:00 ET with NON_FLOW class rows, same as the live 2026-08-17 file (first rows of
+both verified at 04:00). Build the premarket family straight from
+`data/buckets/*.csv` in the profile builder; this also collapses the
+operand-reconciliation concern below — baseline and live sides read the SAME
+NON_FLOW class through the SAME classifier by construction. The aggs seed remains
+a fallback only if some historical day proves premarket-incomplete.
+
+**Owner decision recorded (2026-08-17): display gates at 07:00 ET.** Before 07:00
+the columns stay raw (pre_vol/pre_share/pre_conc as shipped). Rationale: the
+04:00–07:00 tape is thin enough that matched-minute medians are ~zero for most
+names — MAD collapses, the σ floor dominates, and a z would measure the floor, not
+the flow. By 07:00 the cumulative-since-04:00 series has integrated three hours and
+liquid names have real medians. The sub-07:00 region stays raw unless ledger
+evidence someday argues for coarser (5/15-min) buckets there.
+
+**Design notes for pickup:**
+- **z on the CUMULATIVE premarket share first** (since-04:00, the D7 pattern) —
+  integration smooths the lumps; per-minute premarket z deferred until the
+  cumulative one proves useful.
+- **Operands must reconcile (the invariant):** the live lens is the NON_FLOW class
+  through the premarket window; aggs bars are all extended-hours volume. These
+  should match closely (premarket prints ARE the Form T prints) but it is a claim
+  to MEASURE, not assume — 2026-08-17 is the first day with both a live premarket
+  capture and aggs coverage; reconcile them before trusting a z. Persistent
+  discrepancy → seed stays, but z waits for 20 days of our own premarket buckets.
+- Per-ticker profiles only (the invariant); premarket family gets its own rows
+  (04:00–09:30), own σ floors, and the MinProfiledDays gate unchanged.
+- Once ~20 live premarket sessions accumulate in our own bucket files, rebuild the
+  baseline from our store and retire the aggs seed (same maturation as 2.1).
+
 ## Pre-market / post-market (extended hours) tracking (new display scope — trader input needed)
 
-**Logged:** 2026-08-13. **Lands in:** its own post-v1 story (Phase 6 earliest); touches
-ingest hours, bucket store, and a session-scoped *read* of the 0.3 classification —
-never the 0.3 table itself.
+**Logged:** 2026-08-13. **Status 2026-08-17:** the premarket *display* slice of this
+entry shipped as premarket-view-v0 (raw pre_vol/pre_share/pre_conc in the trader
+view, NON_FLOW-lens, frozen at the open) and its typ/z follow-up is the entry
+above; what remains here is post-market, the separate extended-hours ledger,
+ingest-window questions, and the trader decisions below. **Lands in:** its own
+post-v1 story (Phase 6 earliest); touches ingest hours, bucket store, and a
+session-scoped *read* of the 0.3 classification — never the 0.3 table itself.
 
 **What:** v1 is a regular-session instrument by design — Form T (12) and Extended Hours
 Sold OOS (13) classify `NON_FLOW`, historical bars are filtered to 09:30–16:00, and

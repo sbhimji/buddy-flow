@@ -186,7 +186,34 @@ Each story: mini-spec → implement → unit tests → verify on replay → watc
 **6.3 — Ops** — market-calendar scheduler (holidays, half days), process supervision, disk monitoring for capture files, alerting on feed silence.
 **6.4 — Acceptance suite** — §6 tests A–E as a single command against the recorded corpus; run green two consecutive days.
 **6.5 — Live soak** — one full live week including at least one macro morning; nightly grading ledger reviewed with the trader each evening (this review is also the mechanism for tuning weights, dead-bands, and thresholds — D-item defaults are starting points, the ledger is the judge).
-**6.6 — Options overlay (v2 gate)** — Unusual Whales net-premium as a secondary brightness input only, added only after the trader confirms daily use of v1 (§4 priority 3, §7 scope law).
+**6.6 — Options overlay (v2 gate)** — Unusual Whales net-premium as a secondary brightness input only, added only after the trader confirms daily use of v1 (§4 priority 3, §7 scope law). Consumes Phase 7 outputs (capture, buckets, profiles, NetOptionsConviction); the gate itself is unchanged.
+
+---
+
+## Phase 7 — Options tape (parallel workstream, added 2026-08-18)
+
+Source spec: `docs/foundations/SECTOR-options-flow-layer.docx` §3.1 only (owner-confirmed).
+Deferred from that doc to backlog: §3.2 supporting metrics, the nightly OI-delta referee,
+and all Part-4 fusion (glow weight, tile arcs, alert classes — additionally gated on
+6.6/D13; scope law §7 unchanged). This phase is capture + math + **dev view only**, and
+runs in parallel with Phases 3–5; nothing here sits on their critical path. Architecture:
+a sibling pipeline (`optingest`/`uwfeed`/`optclassify`/`optbucket`/`optprofile`/
+`conviction`, separate binaries) — zero changes to the equity path. Sign source settled
+2026-08-18: vendor side tags, verbatim. Conviction weights live in
+`docs/foundations/options-weights-v1.json` (PM-editable); every derived artifact is
+weights-hash-stamped and readers refuse stale stamps; a weight change is a
+regenerate-from-capture event.
+
+**~~7.0 — Vendor verification & smoke~~** ✅ resolved 2026-08-20 — throwaway probes (`discovery-scripts/verify-uw/`); join-cap, heartbeat, message rate, full-tape inner format, WS↔full-tape field parity (side tags = the keystone), multiplier scan. Mini-spec: docs/mini-specs/7.0-uw-verification.md. Gates all 7.x.
+**~~7.1 — Options capture, unconditional~~** ✅ resolved 2026-08-24 (three clean production sessions; opening-minute loss found by 7.5 parity and fixed same day, verified from 08-25) — `uwfeed.RunLive` + `cmd/live-options` → `data/capture-options/<date>/stream.jsonl` (capture-before-parse, reuse `internal/capture`). Starts the day it lands; sessions can't be recorded retroactively. Calendar-urgent.
+**~~7.2 — Decode, pipeline & replay~~** ✅ resolved 2026-08-24 (18.47M prints replayed, 0 decode errors, byte-identical) — `optingest` + shared `decodeOptionsFrame` (the live/replay determinism contract) + `StreamCapture` + `cmd/replay-options`.
+**~~7.3 — Classifier & weights config~~** ✅ resolved 2026-08-24 (independent Python recomputation: 69,677 rows, 0 mismatches) — `optclassify`: sweep codes, vendor side tags, moneyness (D14/D17), DTE, size-vs-OI (D16); weights load+hash. Deep-ITM-heavy fixture must produce near-zero conviction.
+**~~7.4 — Options bucket store~~** ✅ resolved 2026-08-24 (byte-identical rebuilds; mini-spec docs/mini-specs/7.4-options-buckets.md) — `optbucket`: per-underlying 1-second store; call/put × side premium slices + stored NetConviction; weights-stamped CSV; column-compatibility contract.
+**~~7.5 — Backfill~~** ✅ resolved 2026-08-24 (26 days converted, byte-identical; parity day found and fixed the opening-minute capture loss — full tape is the baseline source until the live open matches) — `cmd/uw-backfill`: ~20 full-tape zips → universe-filtered bucket CSVs through the same normalizer; WS-vs-full-tape parity day documented in data.md.
+**~~7.6 — Options profiles & floors~~** ✅ resolved 2026-08-24 (20-day build in 13s, byte-identical rebuild, Python recomputation to 6 decimals) — `optprofile` + `cmd/profiles-options`: per-ticker signed minute profiles; basket baselines as day-level series (shares.go precedent — signed sparse medians don't sum); `sigma_floor_netconv` (D18); zero-print member days count (options silence is normal, unlike equity D2b).
+**7.7 — Metric column (dev view only)** *(snapshot form accepted 2026-08-24, z verified independently; `-follow` live dashboard added as a separate read-only process — first live use 2026-08-25: full session on :8788, z populated 09:31–15:59, 5.15M prints, 0 decode errors, tape parity confirmed)* — `internal/conviction`: `net_conv` + `conv_z` in `cmd/replay-options -view`; footer passes the no-buy/sell scanner; no trader view, no glow.
+**7.8 — Verification harness** — `discovery-scripts/options-verify/`: independent recompute of net_conviction/conv_z; net-prem-ticks cross-check of unweighted slices.
+**7.9 — Docs close-out** — phase statused, data.md finalized, CLAUDE.md status touch-up, backlog entries for everything deferred.
 
 ---
 
@@ -233,6 +260,11 @@ One pass, answered in writing; defaults apply until overridden; the nightly ledg
 | D11 | Regime-sentence wording sign-off (correlational templates) | Per 3.7 | 3.7, 5.2 |
 | D12 | Basket-edit workflow (who, how, versioned config) | Config file, engineer applies | 0.1 |
 | D13 | Ignition options-premium confirmation gate (baskets-v2 config; conflicts with §7 "overlay, never driver" — ignition stays a v2-backlog display-emphasis badge, no alert mechanics, until resolved) | Disabled | 6.6 |
+| D14 | Conviction moneyness bands: precedence + unstated weights (SECTOR §3.1 leaves ATM±5% inside OTM≤15%; OTM>15%, ITM 5–15%, deep-ITM boundary unstated) | ATM band wins; OTM 5–15% = 1.0; OTM>15% = 0.5; ITM 5–15% = 0.5; deep ITM = beyond 15% ITM, 0.1 | 7.3 |
+| D15 | mid/no_side prints (zero sign) in any future ratio denominator | Included — uncertainty damps toward 0 (3.3 precedent) | 7.3 |
+| D16 | w_size "strike OI" reading + OI=0 (new strikes, 0DTE) | Print's contract prior-close `open_interest`; OI=0 → weight 1.0 (no boost), counted | 7.3 |
+| D17 | Empty `underlying_price` (index names) → moneyness incomputable | Moneyness weight 1.0, counted; equity-tape fallback deferred | 7.3 |
+| D18 | σ-floor fraction for the `netconv` family | 0.25× (mirror D5) | 7.6 |
 
 ## Appendix C — Post-review amendments (2026-08-09)
 

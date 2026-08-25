@@ -487,6 +487,14 @@ zero reconnects that day) — recheck once the re-broadcast question is settled.
 
 ## Trader view as a separate process — follow-mode replay (owner request; interim risk in place)
 
+**Delivered for the options tape first (2026-08-24):** `cmd/replay-options -follow`
+tails `data/capture-options/<date>/stream.jsonl` through a follow-aware reader
+(`uwfeed.FollowReader`: torn tail retried, never skipped), decodes through the
+production path, and re-renders the basket table every 5s of event time — single
+goroutine, drain-then-render, zero coupling to `cmd/live-options`. The equity side
+still needs its own follow-mode reader over `capture.Reader`'s finished-file
+semantics; the options implementation is the template.
+
 **Logged:** 2026-08-16 (premarket-capture scheduling discussion). **Lands in:**
 `feed.StreamCapture` + a `-follow` flag on `cmd/replay`; small story, mini-spec first.
 
@@ -562,3 +570,19 @@ purely a read-time grouping, so no baseline rebuild per config.
   against the config that produced them; stamp config identity into the ledger.
 - Trader decisions: whether switching is live-session or pre-open only, and whether
   benchmarks/bond-gate groups are shared across configs or per-config.
+
+## Shared websocket session runner — extract feed/uwfeed duplication (post-7.1 review, 2026-08-19)
+
+`internal/uwfeed/live.go` mirrors `internal/feed/live.go`'s reconnect/backoff/watcher
+machinery near line-for-line (capped ladder + healthy-connection reset, deliberate-vs-
+fault close flag, interruptible backoff wait, capture-before-parse read loop), and
+`cmd/live-options` mirrors `cmd/live`'s signal handling and status ticker. Deliberate
+at 7.1 time: the plan traded DRY for zero blast radius on the proven equity feeder.
+The cost, flagged in review: a fix to one copy's hard-won lesson won't propagate to
+the other.
+
+**When to pick up:** after the options feeder has real live mileage (a few clean
+weeks), extract a shared session-runner (dial hook + post-connect hook + read-loop
+callback) consumed by both feeders, moving each vendor's auth/join/decode behind the
+hooks. Touching `internal/feed` means re-running the 1.2 acceptance drills on the
+equity side — budget for that, don't sneak it in.

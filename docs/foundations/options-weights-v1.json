@@ -1,0 +1,25 @@
+{
+  "version": "options-weights-v1",
+  "note": "Conviction weights for NetOptionsConviction (SECTOR spec 3.1, defaults D14-D17). PM edits this file, never code. Any change requires regenerating options buckets and profiles from capture/full-tape (the weights hash stamped in every derived artifact enforces this mechanically).",
+  "sweep_weight": 1.5,
+  "moneyness": {
+    "atm_band_pct": 0.05,
+    "atm_weight": 0.5,
+    "otm_near_max_pct": 0.15,
+    "otm_near_weight": 1.0,
+    "otm_far_weight": 0.5,
+    "itm_near_weight": 0.5,
+    "deep_itm_min_pct": 0.15,
+    "deep_itm_weight": 0.1,
+    "no_underlying_price_weight": 1.0
+  },
+  "dte": {
+    "max_days": 45,
+    "weight": 1.25
+  },
+  "size_oi": {
+    "frac": 0.25,
+    "weight": 1.5,
+    "zero_oi_weight": 1.0
+  }
+}

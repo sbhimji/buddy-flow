@@ -126,6 +126,72 @@ w_size weight (D16) reads it as such. Intraday OI does not exist anywhere.
 There is no separate price feed: current price = last trade; opening price = the opening
 auction cross print (identified via condition codes).
 
+## Storage & retention (mini-spec 8.1, 2026-08-25)
+
+S3 is the archive; the Studio's `data/` is a cache. One job, `bin/nightly`
+(`com.buddyflow.nightly`, 22:00 CT weekdays), owns every roll: options
+full-tape → `buckets-options` → `profiles-options`; equity `buckets` →
+`profiles`; capture compression; upload; local retention; disk report.
+Re-run a night by hand: `bin/nightly -date YYYY-MM-DD` (`-dry-run` logs the
+plan and does nothing; `-skip step,…` for partial runs). Log: `data/nightly.log`.
+
+**S3 layout** — `s3://<bucket>/<class>/<name>`, name = path relative to the
+class directory under `data/`. Bucket versioning on.
+
+| Class | Local | Archived name | Storage class | Local retention |
+|---|---|---|---|---|
+| `capture` | `data/capture/<date>/` | `<date>/stream.jsonl.gz`, `<date>/manifest.json` | STANDARD_IA | 5 most recent days |
+| `capture-options` | `data/capture-options/<date>/` | same | STANDARD_IA | 3 days |
+| `full-tape` | `data/full-tape/<date>.zip` | `<date>.zip` | STANDARD_IA | 0 (deleted once uploaded) |
+| `buckets` | `data/buckets/` | `<date>.csv`, `<date>.trades-only.csv`, `<date>.partial.csv` | STANDARD | 25 days |
+| `buckets-options` | `data/buckets-options/` | `<date>.csv` (`.partial.csv`) | STANDARD | 25 days |
+| `profiles` | `data/profiles/` | `<date>/…` (whole dir under the build's through-date) | STANDARD | overwritten nightly, no retention |
+| `profiles-options` | `data/profiles-options/` | `<date>/…` | STANDARD | same |
+
+Retention rules, all local-only (S3 keeps everything): a file is deleted only
+when it exists in S3 with the same size; a file dated today is never touched
+(a live agent may hold it open); a raw `stream.jsonl` is never deleted by
+retention (compression owns it); dates listed in
+`docs/foundations/reference-days.json` (`{"dates": [...]}`, owner-maintained —
+the §6 reference days) are never deleted locally. `data/live.log` is truncated
+at each `com.buddyflow.live` start and by nightly beyond 200 MB (frames are
+reproducible from replay); same for `live-options.log`.
+
+Vendor flat files (`data/flat-files/`, the 2.1 bootstrap inputs) are **not
+archived** (owner, 2026-08-25): the vendor keeps them and `tools/download-trades.py`
+re-fetches on demand; the derived `*.trades-only.csv` bucket files are archived like
+any other bucket day.
+
+**Capture compression.** Writers stay uncompressed (a torn gzip would make
+follow/resume harder); nightly gzips every closed capture (manifest present,
+writer's flock free) at BestCompression (~10% of raw) and unlinks the raw only
+after two proofs: the gunzipped stream hashes to the raw's sha256, and a
+replay of the `.gz` through `cmd/replay` / `cmd/replay-options` yields a
+bucket file byte-identical to the reference — for equity the file `cmd/live`
+wrote, otherwise a replay of the raw. Any mismatch keeps the raw and fails
+the step.
+
+**Schemas and stamps of the archived classes** — the 8.3 seam: builders read
+`buckets*/<date>.csv` and write `profiles*/<date>/`; the view reads profiles.
+Capture line format: 1.2 (`<recv_ns> <raw frame>`) + `manifest.json`. Equity
+bucket CSV: 1.4 (`second,symbol,…`; coverage stated by the filename suffix).
+Options bucket CSV: 7.4, header carries the weights stamp `<version>@<hash>`;
+readers refuse a mismatch. Equity profiles: 2.1/2.2/3.1 (`<SYM>.csv`,
+`shares/`, `_floors.csv`, inputs line). Options profiles: 7.6 (ticker,
+`baskets/`, `_floors.csv`, stamp + inputs). Full-tape zip: vendor CSV, 7.5.
+
+**Credentials.** The archive reads only `ARCHIVE_S3_BUCKET`,
+`ARCHIVE_S3_REGION`, `ARCHIVE_AWS_ACCESS_KEY_ID`, `ARCHIVE_AWS_SECRET_ACCESS_KEY`
+(env, then `.env`). The `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` pair in
+`.env` belongs to the **vendor's** flat-file endpoint (`files.massive.com`,
+`tools/download*.py`) and is never used by the archive; neither pair is logged.
+
+**Rebuilding from the archive.** `bin/profiles -archive` /
+`bin/profiles-options -archive` fetch the last N bucket days into the local
+buckets dir before discovery, so an empty Studio or a laptop builds from S3
+alone. No S3 code lives in `internal/profile`, `optprofile`, `flowshare`,
+`conviction`.
+
 ## Deferred / backlogged (not procured)
 
 - **Failover feed** — dual-feed requirement deferred; intended second feed is Databento

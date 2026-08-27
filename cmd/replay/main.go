@@ -27,8 +27,11 @@ import (
 	"buddy-flow/internal/feed"
 	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
+	"buddy-flow/internal/optbucket"
+	"buddy-flow/internal/optclassify"
 	"buddy-flow/internal/premarket"
 	"buddy-flow/internal/session"
+	"buddy-flow/internal/tickerview"
 	"buddy-flow/internal/universe"
 )
 
@@ -51,6 +54,11 @@ func main() {
 		profilesDir = flag.String("profiles", "data/profiles", "profile directory for -view baselines")
 		viewMode    = flag.String("view-mode", "dev", "-view column set: dev (all metrics, name order) or trader (trader-view-v0: cum-share story, cum-z sort, significance highlight)")
 		viewAt      = flag.String("view-at", "", "also render the -view table as of this ET HH:MM:SS after the replay (spot checks; buckets are event-time keyed, so any past second is exact)")
+		basketName  = flag.String("basket", "", "ticker-view-v0 drill-down: render this basket's members under its row, or 'all' for every basket (trader mode only)")
+		drillPath   = flag.String("drill", "", "trader mode: rewrite this file (atomically, every 5s of event time) with every basket's ticker drill-down — tools/live_view_server.py --drill serves it as ?basket=NAME for a paced replay watched in the browser")
+		optBuckets  = flag.String("options-buckets", "", "ticker-view-v0: the session's options bucket file (7.4, data/buckets-options/<date>.csv) — with -options-profiles adds per-ticker conv_z/net_z")
+		optProfiles = flag.String("options-profiles", "", "ticker-view-v0: options profile dir (7.6) for per-ticker conv_z/net_z; requires -options-buckets")
+		optWeights  = flag.String("options-weights", "docs/foundations/options-weights-v1.json", "conviction weights config (7.3) — the stamp the options files must carry")
 	)
 	flag.Parse()
 	if *tradesPath == "" && *quotesPath == "" && *capturePath == "" {
@@ -82,6 +90,18 @@ func main() {
 	}
 	if *viewMode != "dev" && *viewMode != "trader" {
 		fmt.Fprintln(os.Stderr, "-view-mode must be dev or trader")
+		os.Exit(2)
+	}
+	if *basketName != "" && (!*view || *viewMode != "trader") {
+		fmt.Fprintln(os.Stderr, "-basket requires -view -view-mode trader")
+		os.Exit(2)
+	}
+	if (*optBuckets == "") != (*optProfiles == "") {
+		fmt.Fprintln(os.Stderr, "-options-buckets and -options-profiles go together")
+		os.Exit(2)
+	}
+	if *optProfiles != "" && (!*view || *viewMode != "trader") {
+		fmt.Fprintln(os.Stderr, "-options-profiles requires -view -view-mode trader")
 		os.Exit(2)
 	}
 	if *viewAt != "" {
@@ -152,6 +172,7 @@ func main() {
 	// Exactly one SetObserver call — the pipeline has a single slot, and a
 	// second call would silently replace the first.
 	var dv *devview.View
+	var drill *tickerview.DrillWriter
 	if *view {
 		bks, err := universe.LoadBaskets(*basketsPath)
 		if err != nil {
@@ -189,6 +210,33 @@ func main() {
 			// same composition as cmd/live so replays reproduce the
 			// trader's screen.
 			cols, rank, footer = premarket.New(store, unionStates).ExtendTrader(cols, rank, footer)
+			// Ticker view (ticker-view-v0): crossings strip on every
+			// trader frame; drill-down under the -basket row; per-ticker
+			// options z only when the options tape + profiles are given.
+			var opts *tickerview.OptionsSource
+			if *optProfiles != "" {
+				if opts, err = loadOptions(*optWeights, *optBuckets, *optProfiles, syms); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+			}
+			tv, err := tickerview.New(store, table, bks, dv.Profiles(), floors, opts)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			if *drillPath != "" {
+				drill = &tickerview.DrillWriter{Calc: tv, Path: *drillPath, Every: 5}
+			}
+			if *basketName != "" {
+				if *basketName != tickerview.AllBaskets && !tv.HasBasket(*basketName) {
+					fmt.Fprintf(os.Stderr, "-basket %q is not a basket in %s\n", *basketName, *basketsPath)
+					os.Exit(2)
+				}
+				dv.SetDetail(tv.DetailFor(*basketName))
+			}
+			dv.SetTrailer(tv.Strip)
+			footer += tickerview.Footer
 			dv.SetColumns(cols)
 			dv.SetRank(rank)
 			dv.SetFooter(footer)
@@ -218,7 +266,7 @@ func main() {
 	// Capture replay (mini-spec 1.2 done-when #2): one sequential stream
 	// through the live decoder, then the same report path as flat files.
 	if *capturePath != "" {
-		stopRender := startRenderLoop(dv)
+		stopRender := startRenderLoop(dv, drill)
 		start := time.Now()
 		ls, err := feed.StreamCapture(*capturePath, p, feed.ReplayOptions{
 			Speed:    *speed,
@@ -375,6 +423,22 @@ func main() {
 	writeBuckets(store, *bucketsPath)
 }
 
+// loadOptions binds the replayed day's options bucket file (7.4) and the
+// per-ticker options profiles (7.6) — both stamp-checked against the
+// weights config — as the ticker view's options source.
+func loadOptions(weightsPath, bucketsPath, profilesDir string, syms []string) (*tickerview.OptionsSource, error) {
+	w, hash, err := optclassify.LoadWeights(weightsPath)
+	if err != nil {
+		return nil, err
+	}
+	stamp := w.Version + "@" + hash
+	sess, err := optbucket.ReadCSV(bucketsPath, stamp)
+	if err != nil {
+		return nil, err
+	}
+	return tickerview.LoadOptions(profilesDir, syms, stamp, tickerview.SessionMinutes(sess))
+}
+
 // startRenderLoop drives the -view refresh: re-render whenever the REPLAYED
 // clock has crossed a second (checked on a wall-clock ticker — the renderer
 // itself is pure and never sees wall time). Instant replay naturally
@@ -382,7 +446,7 @@ func main() {
 // be called after the pipeline drains; it prints the final table into
 // scrollback (no clear) so the session's last state survives above the
 // stats. No-op when dv is nil.
-func startRenderLoop(dv *devview.View) (stop func()) {
+func startRenderLoop(dv *devview.View, drill *tickerview.DrillWriter) (stop func()) {
 	if dv == nil {
 		return func() {}
 	}
@@ -402,6 +466,7 @@ func startRenderLoop(dv *devview.View) (stop func()) {
 				if sec := dv.ClockSec(); sec > last {
 					last = sec
 					fmt.Print("\033[H\033[2J" + dv.Render(sec))
+					drill.MaybeWrite(sec)
 				}
 			}
 		}
@@ -412,6 +477,7 @@ func startRenderLoop(dv *devview.View) (stop func()) {
 		if sec := dv.ClockSec(); sec > 0 {
 			fmt.Println()
 			fmt.Print(dv.Render(sec))
+			drill.MaybeWrite(sec)
 		}
 	}
 }

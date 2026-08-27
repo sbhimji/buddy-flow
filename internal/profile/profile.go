@@ -14,6 +14,15 @@
 // bucket's sample (F13) — thin names owe their thinness to the baseline.
 // Sigma here is pre-floor: story 2.2 applies σ_used = max(σ, floor) at z
 // time; MAD=0 is stored as 0, never invented away.
+//
+// The cum-dollar family (ticker-view-v0): per minute, the median/MAD over
+// the lookback days of the day's CUMULATIVE dollars from the open through
+// that minute, on the auction-inclusive slice (CountedWithAuctions — the
+// same window and slice as the 3.1 D7 cum-share family, so a ticker's
+// cum_$_z and its basket's cum-share story share a clock). Median of a sum
+// is not a sum of medians, so the per-minute family cannot substitute; it
+// is computed as its own series here. Extra columns on the same per-ticker
+// file — one file per ticker stays the rule.
 package profile
 
 import (
@@ -72,20 +81,36 @@ func CountedWithAuctions(b bucket.Bucket) (shares, dollars float64) {
 	return shares, dollars
 }
 
-// Row is one profiled minute bucket.
+// Row is one profiled minute bucket. The Cum fields are the cum-dollar
+// family: cumulative auction-inclusive dollars from the open THROUGH this
+// minute (a different window and slice from the per-minute fields — the
+// two are deliberately distinct measurements).
 type Row struct {
-	MinuteOfDay   int
-	Days          int
-	MedianShares  float64
-	SigmaShares   float64
-	MedianDollars float64
-	SigmaDollars  float64
+	MinuteOfDay      int
+	Days             int
+	MedianShares     float64
+	SigmaShares      float64
+	MedianDollars    float64
+	SigmaDollars     float64
+	MedianCumDollars float64
+	SigmaCumDollars  float64
 }
 
-// Profile is one ticker's 390 regular-session minute buckets.
+// Profile is one ticker's 390 regular-session minute buckets. HasCumDollars
+// is false for a file written before the cum-dollar family existed: its
+// Cum fields are zero and no consumer may treat them as a baseline (a
+// missing typical must render a gap, never $0).
 type Profile struct {
-	Symbol string
-	Rows   []Row // indexed 0..389 = minute-of-day − session.OpenMinute
+	Symbol        string
+	Rows          []Row // indexed 0..389 = minute-of-day − session.OpenMinute
+	HasCumDollars bool
+}
+
+// OpeningCross returns the opening-auction slice of a bucket (the
+// CROSS_OPEN class alone): the open% anchor in ticker-view-v0 is the cross
+// VWAP = dollars/shares of these prints. One policy source, like Counted.
+func OpeningCross(b bucket.Bucket) (shares, dollars float64) {
+	return b.Class[classify.CrossOpen].Shares, b.Class[classify.CrossOpen].Dollars
 }
 
 // Day is one input session: its ET date and its bucket file.
@@ -110,14 +135,16 @@ func Build(symbols []string, days []Day) ([]Profile, error) {
 		seen[d.Date] = true
 	}
 
-	// samples[symbol][minuteIdx] = per-day counted volumes
-	type acc struct{ shares, dollars []float64 }
+	// samples[symbol][minuteIdx] = per-day counted volumes, plus the day's
+	// cumulative auction-inclusive dollars through the minute.
+	type acc struct{ shares, dollars, cumDollars []float64 }
 	samples := make(map[string][]acc, len(symbols))
 	for _, sym := range symbols {
 		s := make([]acc, session.MinutesPerSession)
 		for i := range s {
 			s[i].shares = make([]float64, 0, len(days))
 			s[i].dollars = make([]float64, 0, len(days))
+			s[i].cumDollars = make([]float64, 0, len(days))
 		}
 		samples[sym] = s
 	}
@@ -157,29 +184,39 @@ func Build(symbols []string, days []Day) ([]Profile, error) {
 		}
 		for _, sym := range symbols {
 			s := samples[sym]
+			// The minute loop covers [open, close) only, so the closing
+			// cross (16:00:00 SIP ts) never enters the cumulative — the
+			// same clamp the D7 cum-share family and the runtime window
+			// apply.
+			cum := 0.0
 			for m := session.OpenMinute; m < session.CloseMinute; m++ {
 				min, err := sess.DeriveMinute(sym, starts[m-session.OpenMinute])
 				if err != nil {
 					return nil, err
 				}
 				sh, dl := Counted(min)
+				_, adl := CountedWithAuctions(min)
+				cum += adl
 				i := m - session.OpenMinute
 				s[i].shares = append(s[i].shares, sh)
 				s[i].dollars = append(s[i].dollars, dl)
+				s[i].cumDollars = append(s[i].cumDollars, cum)
 			}
 		}
 	}
 
 	out := make([]Profile, 0, len(symbols))
 	for _, sym := range symbols {
-		p := Profile{Symbol: sym, Rows: make([]Row, session.MinutesPerSession)}
+		p := Profile{Symbol: sym, Rows: make([]Row, session.MinutesPerSession), HasCumDollars: true}
 		for i, a := range samples[sym] {
 			medS, sigS := robust(a.shares)
 			medD, sigD := robust(a.dollars)
+			medC, sigC := robust(a.cumDollars)
 			p.Rows[i] = Row{
 				MinuteOfDay: session.OpenMinute + i, Days: len(days),
 				MedianShares: medS, SigmaShares: sigS,
 				MedianDollars: medD, SigmaDollars: sigD,
+				MedianCumDollars: medC, SigmaCumDollars: sigC,
 			}
 		}
 		out = append(out, p)
@@ -213,7 +250,15 @@ func median(xs []float64) float64 {
 	return (xs[n/2-1] + xs[n/2]) / 2
 }
 
-var header = []string{"minute_of_day", "days", "median_shares", "sigma_shares", "median_dollars", "sigma_dollars"}
+// requiredHeader is the original per-ticker column set every profile file
+// must carry; cumHeader is the cum-dollar family, written by every build
+// since ticker-view-v0 and optional on read (older files load with
+// HasCumDollars=false).
+var (
+	requiredHeader = []string{"minute_of_day", "days", "median_shares", "sigma_shares", "median_dollars", "sigma_dollars"}
+	cumHeader      = []string{"median_cumdollars", "sigma_cumdollars"}
+	header         = append(append([]string(nil), requiredHeader...), cumHeader...)
+)
 
 func fnum(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
 
@@ -233,8 +278,9 @@ func Write(dir string, profiles []Profile) error {
 		w := bufio.NewWriter(f)
 		fmt.Fprintln(w, strings.Join(header, ","))
 		for _, r := range p.Rows {
-			fmt.Fprintf(w, "%d,%d,%s,%s,%s,%s\n", r.MinuteOfDay, r.Days,
-				fnum(r.MedianShares), fnum(r.SigmaShares), fnum(r.MedianDollars), fnum(r.SigmaDollars))
+			fmt.Fprintf(w, "%d,%d,%s,%s,%s,%s,%s,%s\n", r.MinuteOfDay, r.Days,
+				fnum(r.MedianShares), fnum(r.SigmaShares), fnum(r.MedianDollars), fnum(r.SigmaDollars),
+				fnum(r.MedianCumDollars), fnum(r.SigmaCumDollars))
 		}
 		if err := w.Flush(); err != nil {
 			f.Close()
@@ -268,12 +314,17 @@ func Read(dir, symbol string) (*Profile, error) {
 	for i, n := range names {
 		idx[n] = i
 	}
-	for _, n := range header {
+	for _, n := range requiredHeader {
 		if _, ok := idx[n]; !ok {
 			return nil, fmt.Errorf("%s: missing column %q", path, n)
 		}
 	}
-	p := &Profile{Symbol: symbol}
+	p := &Profile{Symbol: symbol, HasCumDollars: true}
+	for _, n := range cumHeader {
+		if _, ok := idx[n]; !ok {
+			p.HasCumDollars = false // pre-ticker-view file: the family is absent, not zero
+		}
+	}
 	line := 1
 	for sc.Scan() {
 		line++
@@ -300,6 +351,9 @@ func Read(dir, symbol string) (*Profile, error) {
 			MinuteOfDay: pI("minute_of_day"), Days: pI("days"),
 			MedianShares: pF("median_shares"), SigmaShares: pF("sigma_shares"),
 			MedianDollars: pF("median_dollars"), SigmaDollars: pF("sigma_dollars"),
+		}
+		if p.HasCumDollars {
+			r.MedianCumDollars, r.SigmaCumDollars = pF("median_cumdollars"), pF("sigma_cumdollars")
 		}
 		if perr != nil {
 			return nil, fmt.Errorf("%s:%d: %w", path, line, perr)

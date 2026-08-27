@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.buddyflow.nightly</string>
+  <key>WorkingDirectory</key><string>/Users/saimbhimji/repo/buddy-flow</string>
+  <!-- Mini-spec 8.1: the one nightly job. Options roll (full-tape zip →
+       buckets-options → profiles-options), equity roll (buckets → profiles),
+       capture compression (verified before the raw is unlinked), S3 upload
+       of everything new, local retention, disk report. Replaces
+       com.buddyflow.profiles and the manual options roll.
+       Re-run a night by hand: bin/nightly -date YYYY-MM-DD. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-i</string>
+    <string>/Users/saimbhimji/repo/buddy-flow/bin/nightly</string>
+  </array>
+  <!-- 22:00 Central = 23:00 ET year-round (both zones switch DST together).
+       cmd/live stops at 20:00 ET; the UW full tape is published by ~18:10 ET. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/Users/saimbhimji/repo/buddy-flow/data/nightly.log</string>
+  <key>StandardErrorPath</key><string>/Users/saimbhimji/repo/buddy-flow/data/nightly.err.log</string>
+</dict></plist>

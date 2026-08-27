@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.buddyflow.live</string>
+  <key>WorkingDirectory</key><string>/Users/saimbhimji/repo/buddy-flow</string>
+  <!-- caffeinate -i keeps the Mac from idle-sleeping mid-session; the
+       capture dies if the machine naps. -->
+  <!-- -view: trader table frames go to stdout (live.log — watch with
+       `tail -f`); operational logs divert to stderr (live.err.log).
+       INTERIM: couples the 02:55 launch to baseline loading — a missing
+       profile roll kills the whole day's capture. Remove this flag once
+       the follow-mode replay view lands (see backlog: trader view as a
+       separate process). -->
+  <!-- 8.1: live.log is truncated at every start — the view server needs
+       only the latest frame and frames are reproducible from replay.
+       launchd opens StandardOutPath in append mode, so the truncation is
+       done by the shell wrapper before exec. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>: > /Users/saimbhimji/repo/buddy-flow/data/live.log; exec /usr/bin/caffeinate -i /Users/saimbhimji/repo/buddy-flow/bin/live -view</string>
+  </array>
+  <!-- 02:55 Central = 03:55 ET year-round (both zones switch DST together).
+       Capture starts at launch; -until defaults to 20:00 ET inside cmd/live. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>2</integer><key>Minute</key><integer>55</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>2</integer><key>Minute</key><integer>55</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>2</integer><key>Minute</key><integer>55</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>2</integer><key>Minute</key><integer>55</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>2</integer><key>Minute</key><integer>55</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/Users/saimbhimji/repo/buddy-flow/data/live.log</string>
+  <key>StandardErrorPath</key><string>/Users/saimbhimji/repo/buddy-flow/data/live.err.log</string>
+</dict></plist>

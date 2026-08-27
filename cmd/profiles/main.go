@@ -12,6 +12,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"math"
@@ -22,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"buddy-flow/internal/archive"
 	"buddy-flow/internal/bucket"
 	"buddy-flow/internal/profile"
 	"buddy-flow/internal/session"
@@ -69,6 +71,7 @@ func main() {
 		rvolCheck   = flag.String("rvol-check", "", "session bucket file to RVOL-check against existing profiles (skips building)")
 		rvolMinute  = flag.String("rvol-minute", "13:00", "ET minute for the RVOL check, HH:MM")
 		floorFrac   = flag.Float64("sigma-floor-frac", 0.25, "σ floor fraction (2.2 D2): floor = frac × universe median of sigma_family per minute; recorded in _floors.csv")
+		fromArchive = flag.Bool("archive", false, "before day discovery, fetch the last -days bucket days from the S3 archive into -buckets-dir when absent locally (ARCHIVE_* env; mini-spec 8.1)")
 	)
 	flag.Parse()
 	if *days < 1 {
@@ -98,6 +101,13 @@ func main() {
 		return
 	}
 
+	if *fromArchive {
+		n, err := fetchArchived(*bucketsDir, *days, *through)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Printf("archive: %d bucket files fetched into %s\n", n, *bucketsDir)
+	}
 	daysIn, err := discoverDays(*bucketsDir, *days, *through)
 	if err != nil {
 		fatal(err)
@@ -212,6 +222,63 @@ func discoverDays(dir string, n int, through string) ([]profile.Day, error) {
 		out = append(out, profile.Day{Date: d, Path: best[d].path})
 	}
 	return out, nil
+}
+
+// fetchArchived makes the cache whole for a build: lists the archived
+// bucket class, picks the best file per date under the same rules as
+// discoverDays (full beats trades-only; .partial never), keeps the most
+// recent n dates <= through, and EnsureLocal's each. Returns how many were
+// actually downloaded. Discovery itself stays local and unchanged.
+func fetchArchived(dir string, n int, through string) (int, error) {
+	cfg, err := archive.ConfigFromEnv(".env")
+	if err != nil {
+		return 0, err
+	}
+	s, err := archive.Open(cfg)
+	if err != nil {
+		return 0, err
+	}
+	ctx := context.Background()
+	objs, err := s.List(ctx, archive.Buckets)
+	if err != nil {
+		return 0, err
+	}
+	best := map[string]struct {
+		name string
+		rank int
+	}{}
+	for _, o := range objs {
+		date, rank, ok := classifyDayFile(o.Name)
+		if !ok || strings.HasSuffix(o.Name, ".gz") || (through != "" && date > through) {
+			continue
+		}
+		if prev, seen := best[date]; !seen || rank < prev.rank {
+			best[date] = struct {
+				name string
+				rank int
+			}{o.Name, rank}
+		}
+	}
+	dates := make([]string, 0, len(best))
+	for d := range best {
+		dates = append(dates, d)
+	}
+	sort.Strings(dates)
+	if len(dates) > n {
+		dates = dates[len(dates)-n:]
+	}
+	fetched := 0
+	for _, d := range dates {
+		name := best[d].name
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			continue
+		}
+		if _, err := archive.EnsureLocal(ctx, s, archive.Buckets, name, dir); err != nil {
+			return fetched, err
+		}
+		fetched++
+	}
+	return fetched, nil
 }
 
 // checkRVOL is the 2.1 sanity criterion: on an average day, counted volume

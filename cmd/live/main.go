@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -166,14 +167,25 @@ func main() {
 		// equity table starts without them (L2): never a blended number.
 		// Note: the follower's clock is RecvNs-based, so a basket cell here
 		// may lag the :8788 table by one poll.
+		// The clock line carries the tape's state (waiting for tape /
+		// following / refused (<file>) / ended early) so a gap and a
+		// fault read differently on screen.
 		var opts *tickerview.OptionsSource
+		var optState atomic.Value // string; read on the render goroutine
+		optState.Store("")
+		status := bc.Status
 		if *optCapture != "" {
+			optState.Store("waiting for tape")
+			var waitOnce sync.Once
 			f, err := optfollow.Start(optfollow.Config{
 				CapturePath: *optCapture, WeightsPath: *optWeights, BasketsCfg: *basketsPath, ProfilesDir: *optProfiles,
 				Waiting: func(path string) {
-					fmt.Fprintf(logw, "options: waiting for %s to appear (conv_z/net_z gap until then)\n", path)
+					waitOnce.Do(func() { fmt.Fprintf(logw, "options: waiting for %s to appear (conv_z/net_z gap until then)\n", path) })
 				},
-				Opened: func() { fmt.Fprintf(logw, "options: following %s\n", *optCapture) },
+				Opened: func() {
+					optState.Store("following")
+					fmt.Fprintf(logw, "options: following %s\n", *optCapture)
+				},
 			})
 			if err == nil {
 				var src *optequity.Source
@@ -183,11 +195,23 @@ func main() {
 					follower = f
 					cols, footer = src.ExtendTrader(cols, footer)
 					opts = src.Ticker
+					// A tail error ends the follow early: say so once, on
+					// the log and on the clock line — the columns gap from
+					// there, which must not read as a quiet tape.
+					go func() {
+						<-f.Done()
+						if ferr := f.Err(); ferr != nil {
+							optState.Store("ended early")
+							fmt.Fprintf(logw, "options follower ENDED early (conv_z/net_z gap from here): %v\n", ferr)
+						}
+					}()
 				}
 			}
 			if err != nil {
+				optState.Store(optequity.RefusedState(err))
 				fmt.Fprintf(os.Stderr, "options columns REFUSED (equity table starts without conv_z/net_z): %v\n", err)
 			}
+			status = optequity.Status(bc.Status, func() string { return optState.Load().(string) })
 		}
 		// Ticker view (ticker-view-v0): the crossings strip rides on every
 		// frame; every basket's drill-down goes to the -drill file for the
@@ -204,7 +228,7 @@ func main() {
 		dv.SetColumns(cols)
 		dv.SetRank(rank)
 		dv.SetFooter(footer)
-		dv.SetStatus(bc.Status)
+		dv.SetStatus(status)
 		// MO-7: the premarket frame — a second view over the SAME store
 		// (T3: one renderer, two column sets), composed exactly as
 		// cmd/replay -view-mode premarket. It never observes the pipeline
@@ -294,7 +318,7 @@ func main() {
 		// process is never touched. Stop waits for its pipeline to drain.
 		follower.Stop()
 		frames, prints, dupes, decodeErrs := follower.Progress()
-		fmt.Fprintf(logw, "options follower: frames=%d prints=%d dupes=%d decode-errs=%d\n", frames, prints, dupes, decodeErrs)
+		fmt.Fprintf(logw, "options follower: frames=%d prints=%d dupes=%d decode-errs=%d err=%v\n", frames, prints, dupes, decodeErrs, follower.Err())
 	}
 
 	reason := "session end"

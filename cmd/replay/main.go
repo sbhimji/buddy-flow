@@ -57,7 +57,7 @@ func main() {
 		basketName  = flag.String("basket", "", "ticker-view-v0 drill-down: render this basket's members under its row, or 'all' for every basket (trader mode only)")
 		drillPath   = flag.String("drill", "", "trader mode: rewrite this file (atomically, every 5s of event time) with every basket's ticker drill-down — tools/live_view_server.py --drill serves it as ?basket=NAME for a paced replay watched in the browser")
 		optBuckets  = flag.String("options-buckets", "", "the session's options bucket file (7.4, data/buckets-options/<date>.csv) — with -options-profiles adds basket conv_z/net_z to the trader table (MO-5) and per-ticker conv_z/net_z to the drill-down and strip (ticker-view-v0)")
-		optProfiles = flag.String("options-profiles", "", "options profile dir (7.6) for basket and per-ticker conv_z/net_z; requires -options-buckets; a weights-stamp mismatch refuses the options columns loudly and the equity table renders without them")
+		optProfiles = flag.String("options-profiles", "", "options profile dir (7.6) for basket and per-ticker conv_z/net_z; goes with -options-buckets; a weights-stamp mismatch is fatal (acceptance fails fast)")
 		optWeights  = flag.String("options-weights", "docs/foundations/options-weights-v1.json", "conviction weights config (7.3) — the stamp the options files must carry")
 	)
 	flag.Parse()
@@ -241,16 +241,18 @@ func main() {
 			// MO-5: the options tape on the equity screen — basket
 			// conv_z/net_z after class% and the per-ticker source for the
 			// drill-down and strip — only when the options tape + profiles
-			// are given. A stamp mismatch refuses the options columns
-			// loudly (7.7 V3 / MO-5 L2); the equity table still renders.
+			// are given. A stamp mismatch is fatal here (7.7 V3): replay is
+			// the acceptance environment and must fail fast — cmd/live is
+			// the one that keeps its table and refuses only the columns.
 			var opts *tickerview.OptionsSource
 			if *optProfiles != "" {
-				if src, err := optequity.LoadReplay(*optWeights, *optBuckets, *optProfiles, bks, syms); err != nil {
-					fmt.Fprintf(os.Stderr, "options columns REFUSED (equity table renders without conv_z/net_z): %v\n", err)
-				} else {
-					cols, footer = src.ExtendTrader(cols, footer)
-					opts = src.Ticker
+				src, err := optequity.LoadReplay(*optWeights, *optBuckets, *optProfiles, bks, syms)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "options columns REFUSED: %v\n", err)
+					os.Exit(1)
 				}
+				cols, footer = src.ExtendTrader(cols, footer)
+				opts = src.Ticker
 			}
 			// Ticker view (ticker-view-v0): crossings strip on every
 			// trader frame; drill-down under the -basket row.

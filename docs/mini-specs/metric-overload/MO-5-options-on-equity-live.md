@@ -73,11 +73,22 @@ call). With them:
   composition (MO-3 posture). The basket cell is `conviction.BasketMinute`
   → `Baselines.Z` for the last completed minute (clamped at the close like
   the drill-down), memoized per basket per render second.
-- **Refusal posture (L2), both commands:** any options load failure —
-  stamp mismatch names the file — prints `options columns REFUSED (equity
-  table … without conv_z/net_z): <err>` to stderr and the table composes
-  without the pair; cmd/replay no longer exits 1 on it (the shared posture
-  is what lets the stamp test run on replay).
+- **Refusal posture (L2):** cmd/live prints `options columns REFUSED
+  (equity table starts without conv_z/net_z): <err>` to stderr, composes
+  the table without the pair, and the clock line reads `options: refused
+  (<file>)`. cmd/replay exits 1 on the same failure (review 2026-08-27:
+  the acceptance environment fails fast). The clock line's other states:
+  `waiting for tape` (before the capture file exists), `following`,
+  `ended early` (a tail error — also logged once; the columns gap from
+  there, which must not read as a quiet tape).
+- **Colour: conv_z only** (review 2026-08-27). Evidence from 08-24 at
+  09:45 with both cells coloured: 10 cells lit in 22 rows, four of the
+  five |conv_z| ≥ 2 baskets negative on a −0.34% SPY open — the second
+  colour added weight, not information. net_z stays unstyled as the
+  unweighted operand beside it; owner-revisitable at the ledger. The
+  footer's threshold text is built from `SignificantZ`.
+- **Scope law:** "measured here, never used as a driver of any other
+  column" lives in the package doc and this spec, not the trader footer.
 - **cmd/live lag note:** the follower's clock is RecvNs-based (MO-4) — a
   basket cell here can lag the :8788 table by one poll (250 ms tail poll);
   the equity clock is the SIP timestamp. Both describe the same completed

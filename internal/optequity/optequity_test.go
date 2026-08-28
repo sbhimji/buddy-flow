@@ -60,7 +60,10 @@ func row(t *testing.T, s *Source, name string, members []string, atSec int64) *d
 
 func render(s *Source, rc *devview.RowCtx) (cells, styles [2]string) {
 	for i, c := range s.Columns() {
-		cells[i], styles[i] = c.Cell(rc), c.Style(rc)
+		cells[i] = c.Cell(rc)
+		if c.Style != nil {
+			styles[i] = c.Style(rc)
+		}
 	}
 	return
 }
@@ -90,7 +93,7 @@ func TestBasketCellsAreBasketMinuteZ(t *testing.T) {
 	at := m0944 + 60 // 09:45:00
 	cells, styles := render(s, row(t, s, "semis", members, at))
 	// Σ conv = 200 → (200−100)/50 = +2.0; Σ net = (1800−300)−(100−100) = 1500 → (1500−1000)/250 = +2.0.
-	if cells != [2]string{"+2.0", "+2.0"} || styles != [2]string{sgrGreen, sgrGreen} {
+	if cells != [2]string{"+2.0", "+2.0"} || styles != [2]string{sgrGreen, ""} {
 		t.Fatalf("cells %v styles %q", cells, styles)
 	}
 	conv, net, ok := conviction.BasketMinute(read, members, m0944)
@@ -108,7 +111,7 @@ func TestBasketCellsAreBasketMinuteZ(t *testing.T) {
 		t.Fatalf("1.9σ = %q style %q", c[0], st[0])
 	}
 	buckets["B"] = optbucket.Bucket{NetConviction: -150, PremCallBid: 750}
-	if c, st := render(s, row(t, s, "semis", members, at+20)); c != [2]string{"-2.0", "-2.0"} || st != [2]string{sgrRed, sgrRed} {
+	if c, st := render(s, row(t, s, "semis", members, at+20)); c != [2]string{"-2.0", "-2.0"} || st != [2]string{sgrRed, ""} {
 		t.Fatalf("−2.0σ = %v style %q", c, st)
 	}
 	// Gaps: tape not at the minute → ·, unstyled; unknown basket → ·;
@@ -204,6 +207,53 @@ func TestFooterLanguage(t *testing.T) {
 	}
 	if !strings.Contains(Footer, conviction.Footer) {
 		t.Error("footer must carry conviction.Footer verbatim")
+	}
+	if !strings.Contains(Footer, "±2.0σ") || strings.Contains(Footer, "driver") {
+		t.Errorf("footer threshold text / wording: %q", Footer)
+	}
+}
+
+// Without options the trader set is untouched by this package: names and
+// footer are the flowshare+delta composition, verbatim (golden).
+func TestNoOptionsLeavesTraderSetUnchanged(t *testing.T) {
+	stub := devview.Column{Name: "breadth", Width: 9, Cell: func(rc *devview.RowCtx) string { return "" }}
+	cols, _, footer := flowshare.TraderColumns(bucket.NewStore(), nil, nil, nil, stub)
+	cols, footer = delta.New(bucket.NewStore()).ExtendTrader(cols, footer)
+	names := []string{}
+	for _, c := range cols {
+		names = append(names, c.Name)
+	}
+	if got := strings.Join(names, " "); got != "cum_share cum_share_typ cum_share_z breadth concentration_day delta class%" {
+		t.Errorf("names = %s", got)
+	}
+	i := strings.Index(flowshare.TraderFooter, "\n·  ")
+	want := flowshare.TraderFooter[:i+1] + delta.Footer + flowshare.TraderFooter[i+1:]
+	if footer != want || strings.Contains(footer, "conv_z") {
+		t.Errorf("footer changed without options:\n%s", footer)
+	}
+}
+
+// The clock-line status carries the options state after the inner
+// status; empty state appends nothing; refusals name the file.
+func TestStatusComposition(t *testing.T) {
+	inner := func(atSec int64) string { return fmt.Sprintf("SPY +0.10%% at %d", atSec) }
+	state := "waiting for tape"
+	st := Status(inner, func() string { return state })
+	if got := st(7); got != "SPY +0.10% at 7   options: waiting for tape" {
+		t.Errorf("status = %q", got)
+	}
+	state = ""
+	if got := st(7); got != "SPY +0.10% at 7" {
+		t.Errorf("empty state = %q", got)
+	}
+	if got := Status(nil, func() string { return "following" })(1); got != "   options: following" {
+		t.Errorf("nil inner = %q", got)
+	}
+	if got := RefusedState(fmt.Errorf("/x/y/_floors.csv: weights stamp mismatch — rebuild profiles")); got != "refused (_floors.csv)" {
+		t.Errorf("refused = %q", got)
+	}
+	if got := RefusedState(fmt.Errorf("options follower started without profiles")); got != "refused" {
+		t.Errorf("refused (no file) = %q", got)
 	}
 }
 

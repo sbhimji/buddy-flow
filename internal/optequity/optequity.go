@@ -13,6 +13,10 @@
 // render goroutine; the Follower's MinuteBucket is its locked/atomic
 // accessor, and the Baselines are immutable after load.
 //
+// Options premium is measured here, never used as a driver of any other
+// column: the pair is a statement of the options tape, not an input to
+// Glow, tiles or ignition (those stay gated on 6.6 / D13).
+//
 // Stamp posture (7.7 V3, MO-5 L2): the profiles and floors must carry the
 // weights config's stamp; a mismatch is an error from the loaders that
 // names the file — the caller refuses the options columns loudly and the
@@ -21,6 +25,7 @@ package optequity
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"buddy-flow/internal/conviction"
@@ -158,22 +163,53 @@ func style(z float64, ok bool) string {
 }
 
 // Columns is the basket pair: last completed minute's basket sum through
-// the basket's 20d matched-minute baseline; · on any null (7.7 V1).
+// the basket's 20d matched-minute baseline; · on any null (7.7 V1). Only
+// conv_z is coloured; net_z is the unweighted operand beside it (review
+// 2026-08-27 — two coloured cells per row lit 10 of 22 rows on 08-24;
+// owner-revisitable at the ledger).
 func (s *Source) Columns() []devview.Column {
 	return []devview.Column{
 		{Name: "conv_z", Width: 6,
 			Cell:  func(rc *devview.RowCtx) string { c := s.at(rc); return conviction.FormatZ(c.convZ, c.convOK) },
 			Style: func(rc *devview.RowCtx) string { c := s.at(rc); return style(c.convZ, c.convOK) }},
 		{Name: "net_z", Width: 6,
-			Cell:  func(rc *devview.RowCtx) string { c := s.at(rc); return conviction.FormatZ(c.netZ, c.netOK) },
-			Style: func(rc *devview.RowCtx) string { c := s.at(rc); return style(c.netZ, c.netOK) }},
+			Cell: func(rc *devview.RowCtx) string { c := s.at(rc); return conviction.FormatZ(c.netZ, c.netOK) }},
 	}
 }
 
 // Footer is the trader legend for the pair: conviction.Footer verbatim
-// (it passes that package's scanner), laid out as one footer line per
-// column so it reads like the rest of the block.
-const Footer = "conv_z / net_z    = " + conviction.Footer + " Bold at/beyond ±2.0σ (the same threshold as cum_share_z). Options premium is measured here, never used as a driver of any other column.\n"
+// (it passes that package's scanner), laid out as one footer line so it
+// reads like the rest of the block; the threshold text is built from the
+// shared constant so the legend can never drift from the colour rule.
+var Footer = fmt.Sprintf("conv_z / net_z    = %s conv_z bold at/beyond ±%.1fσ (the same threshold as cum_share_z); net_z unstyled.\n", conviction.Footer, SignificantZ)
+
+// Status wraps a clock-line status with the options tape's state —
+// "waiting for tape", "following", "refused (<file>)", "ended early" —
+// so the trader can tell a gap from a fault without reading stderr.
+// state is read on the render goroutine; the caller supplies an atomic
+// accessor. An empty state appends nothing.
+func Status(inner func(atSec int64) string, state func() string) func(atSec int64) string {
+	return func(atSec int64) string {
+		out := ""
+		if inner != nil {
+			out = inner(atSec)
+		}
+		if st := state(); st != "" {
+			out += "   options: " + st
+		}
+		return out
+	}
+}
+
+// RefusedState names the file a load refusal was about, for the status
+// line: the loaders' errors start with the path ("<path>: ...").
+func RefusedState(err error) string {
+	msg := err.Error()
+	if i := strings.Index(msg, ": "); i > 0 && strings.Contains(msg[:i], "/") {
+		return "refused (" + filepath.Base(msg[:i]) + ")"
+	}
+	return "refused"
+}
 
 // ExtendTrader inserts the pair after class% (README column order:
 // … delta class% conv_z net_z pre_share) and the footer block before the

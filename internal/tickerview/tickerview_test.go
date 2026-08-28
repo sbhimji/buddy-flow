@@ -253,12 +253,16 @@ func TestNoCumFamilyGaps(t *testing.T) {
 
 // TestDeltaSigned drives prints through the real pipeline into a
 // time-ordered store (the only kind that classifies) and checks the
-// per-ticker delta/class% with the D9 window: A's 09:30:10 print at the
-// ask is excluded; its 09:30:40 prints — 300 at the ask ($3300), 100 at
-// the bid ($1000), 100 at the midpoint ($1050, tick rule with no prior
-// different price → unclassified) — give delta (3300−1000)/5350 = +0.43
-// (highlighted) on class% 80%; B prints only in the excluded window →
-// counted 0 → gaps.
+// per-ticker trailing delta/class% with the D9 window: A's 09:30:10 print
+// at the ask is excluded; its 09:30:40 prints — 300 at the ask ($3300,
+// quote rule), 100 at the bid ($1000, quote rule), 100 at the midpoint
+// 10.5 ($1050: an up-tick from the last different price 10 → AskSide by
+// the tick rule, so in delta_all but not delta) — give delta
+// (3300−1000)/5350 = +0.43 on class% 80% and delta_all
+// (4350−1000)/5350 = +0.63. Rendered at 09:33:05, the first second the
+// trailing window reaches 150 s; at 09:32:59 it gaps. $5,350 is under the
+// per-ticker highlight floor, so the +0.43 is unstyled. B prints only in
+// the excluded window → counted 0 → gaps.
 func TestDeltaSigned(t *testing.T) {
 	syms := []string{"A", "B"}
 	table := ingest.NewTable(syms)
@@ -295,18 +299,25 @@ func TestDeltaSigned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := c.Rows("one", open+65)
+	if rows := c.Rows("one", open+2*60+59); rows[0].DeltaOK || rows[0].ClassOK {
+		t.Errorf("09:32:59 rendered before the window reached 150 s: %+v", rows[0])
+	}
+	at := open + 3*60 + 5
+	rows := c.Rows("one", at)
 	a, b := rows[0], rows[1]
 	counted, ask, bid := 3300.0+1000.0+1050.0, 3300.0, 1000.0
-	if a.Symbol != "A" || !a.DeltaOK || !a.ClassOK || a.Delta != (ask-bid)/counted || a.Class != (ask+bid)/counted {
+	if a.Symbol != "A" || !a.DeltaOK || !a.ClassOK || a.Delta != (ask-bid)/counted || a.Class != (ask+bid)/counted || a.DeltaSGR != "" {
 		t.Errorf("A = %+v", a)
+	}
+	if dm := c.tickerDelta(table.Lookup("A"), at); !dm.DeltaAllOK || dm.DeltaAll != (ask+1050.0-bid)/counted || dm.Prints != 2 {
+		t.Errorf("A delta_all/prints = %+v", dm)
 	}
 	if b.DeltaOK || b.ClassOK {
 		t.Errorf("B (counted 0 after D9) = %+v", b)
 	}
-	got := c.Detail("one", open+65)
-	if !strings.Contains(got, "\x1b[1;32m +0.43\x1b[0m     80%") {
-		t.Errorf("detail lacks highlighted +0.43 / 80%%:\n%s", got)
+	got := c.Detail("one", at)
+	if !strings.Contains(got, "   +0.43     80%") || strings.Contains(got, "\x1b[1;32m +0.43") {
+		t.Errorf("detail lacks unstyled +0.43 / 80%%:\n%s", got)
 	}
 	if !strings.Contains(got, "      ·       ·") {
 		t.Errorf("B row lacks delta/class%% gaps:\n%s", got)

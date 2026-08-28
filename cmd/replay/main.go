@@ -213,16 +213,18 @@ func main() {
 		// 3.2b volume breadth: reuses the view's already-loaded
 		// per-ticker profiles.
 		vc := breadth.NewVol(bc, store, dv.Profiles())
+		// MO-3: delta / class% from the signed columns MO-2 stores; one
+		// Calc serves whichever column set is composed.
+		dc := delta.New(store)
 		if *viewMode == "trader" {
 			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, vc.BreadthColumn(true))
 			// Premarket columns + pre-open rank (premarket-view-v0) —
 			// same composition as cmd/live so replays reproduce the
 			// trader's screen.
 			cols, rank, footer = premarket.New(store, unionStates).ExtendTrader(cols, rank, footer)
-			// MO-3: delta / class% after concentration_day (README order),
-			// read from the signed columns MO-2 stores; gaps on a store
-			// that recorded none.
-			cols, footer = delta.New(store).ExtendTrader(cols, footer)
+			// After concentration_day (README order); gaps on a store
+			// that recorded no classification.
+			cols, footer = dc.ExtendTrader(cols, footer)
 			// Ticker view (ticker-view-v0): crossings strip on every
 			// trader frame; drill-down under the -basket row; per-ticker
 			// options z only when the options tape + profiles are given.
@@ -262,7 +264,7 @@ func main() {
 			dv.Register(bc.DetailColumn())
 			dv.Register(vc.UpOnVolColumn())
 			dv.Register(vc.VolDetailColumn())
-			for _, c := range delta.New(store).DevColumns() {
+			for _, c := range dc.DevColumns() {
 				dv.Register(c)
 			}
 		}

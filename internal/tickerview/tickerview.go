@@ -8,9 +8,10 @@
 // against its own history. No composite score, no ranked list whose key is
 // not a named metric (V1: the drill-down sorts by cum_$_z; the strip is
 // TIME-ordered — a strip sorted by z would be a screener), no
-// price-change-as-signal, no FlowShare/breadth at ticker level (V3), no
-// NetDelta (V5). A ticker row explains a basket row; it never competes with
-// it.
+// price-change-as-signal, no FlowShare/breadth at ticker level (V3). A
+// ticker row explains a basket row; it never competes with it. Per-ticker
+// delta/class% (V5, revisited by MO-3) render with the D9 open window and
+// the honesty number beside them — the same rules as the basket pair.
 //
 // Everything computes at read time from the 1-second bucket store, the
 // per-ticker profiles (incl. the cum-dollar family) and the floors — no new
@@ -28,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"buddy-flow/internal/bucket"
+	"buddy-flow/internal/delta"
 	"buddy-flow/internal/devview"
 	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
@@ -273,6 +275,10 @@ type Row struct {
 	DollarOK bool
 	OfBasket float64
 	OfOK     bool
+	Delta    float64 // MO-3: last completed minute, strong rules over counted dollars
+	DeltaOK  bool
+	Class    float64 // MO-3: share of counted dollars the book could place
+	ClassOK  bool
 	ConvZ    float64
 	ConvOK   bool
 	NetZ     float64
@@ -328,6 +334,8 @@ func (c *Calc) row(st *ingest.SymbolState, atSec int64, basketCum float64) Row {
 	if basketCum > 0 {
 		r.OfBasket, r.OfOK = r.Cum/basketCum, true
 	}
+	dm := delta.Compute(c.store, []*ingest.SymbolState{st}, c.frame.cmEnd-60, c.frame.cmEnd)
+	r.Delta, r.DeltaOK, r.Class, r.ClassOK = dm.Delta, dm.DeltaOK, dm.Class, dm.ClassOK
 	for i := 0; i < n; i++ {
 		if h.zok[i] && (h.z[i] >= Threshold || h.z[i] <= -Threshold) {
 			r.Since = c.hhmm(i)
@@ -414,7 +422,7 @@ func (c *Calc) Detail(basket string, atSec int64) string {
 	}
 	var sb strings.Builder
 	const ind = "    "
-	fmt.Fprintf(&sb, "%s%-6s  %8s  %7s  %8s  %9s  %7s  %7s  %6s  %9s", ind, "TICKER", "last", "open%", "cum_$", "cum_$_typ", "cum_$_z", "rvol_sh", "$_z", "of_basket")
+	fmt.Fprintf(&sb, "%s%-6s  %8s  %7s  %8s  %9s  %7s  %7s  %6s  %9s  %6s  %6s", ind, "TICKER", "last", "open%", "cum_$", "cum_$_typ", "cum_$_z", "rvol_sh", "$_z", "of_basket", "delta", "class%")
 	if c.opts != nil {
 		fmt.Fprintf(&sb, "  %6s  %6s", "conv_z", "net_z")
 	}
@@ -437,8 +445,12 @@ func (c *Calc) Detail(basket string, atSec int64) string {
 		if sgr := styleZ(r.Z, r.ZOK); sgr != "" {
 			zcell = sgr + zcell + "\x1b[0m"
 		}
-		fmt.Fprintf(&sb, "%s%-6s  %8s  %7s  %8s  %9s  %s  %7s  %6s  %9s", ind, r.Symbol, last, open,
-			fusd(r.Cum, r.CumOK), fusd(r.Typ, r.TypOK), zcell, rvol, fz(r.DollarZ, r.DollarOK), of)
+		dcell := fmt.Sprintf("%6s", delta.FmtDelta(r.Delta, r.DeltaOK))
+		if sgr := delta.Style(r.Delta, r.DeltaOK); sgr != "" {
+			dcell = sgr + dcell + "\x1b[0m"
+		}
+		fmt.Fprintf(&sb, "%s%-6s  %8s  %7s  %8s  %9s  %s  %7s  %6s  %9s  %s  %6s", ind, r.Symbol, last, open,
+			fusd(r.Cum, r.CumOK), fusd(r.Typ, r.TypOK), zcell, rvol, fz(r.DollarZ, r.DollarOK), of, dcell, delta.FmtClass(r.Class, r.ClassOK))
 		if c.opts != nil {
 			fmt.Fprintf(&sb, "  %6s  %6s", fz(r.ConvZ, r.ConvOK), fz(r.NetZ, r.NetOK))
 		}
@@ -619,6 +631,7 @@ cum_$_z           = how unusual today's cum_$ is vs those 20 sessions, in σ —
 rvol_sh           = last full minute's shares (not dollars — the basket columns are dollars) vs the typical for that exact minute — 1.0 = normal pace (excludes auction crosses; cum_$ includes them — two slices on one screen, deliberately)
 $_z               = last full minute's dollars vs the typical for that exact minute, in σ (excludes crosses)
 of_basket         = this ticker's share of its basket's cum_$ — the concentration number from the ticker's side
+delta / class%    = same as the basket pair, for this ticker alone: last full minute's dollars printed at/above the ask or above the midpoint minus at/below the bid or below the midpoint, over all its counted dollars (±0.25 highlighted), and the % of those dollars the book could place; · when no valid quote existed or the day's store carries no classification; 09:30 minute excludes its first 30 s
 conv_z / net_z    = last completed minute's options premium (conviction-weighted / unweighted; ask-side minus bid-side, calls positive puts negative) vs this ticker's own 20d matched-minute median/MAD; · until 10 profiled days (options profile gate) or when no options tape is wired
 since             = the ET minute cum_$_z first went beyond ±2.0σ today; blank if never
 crossed ±2.0σ     = tickers across all baskets whose cum_$_z is beyond ±2.0σ right now, newest crossing first (time order, not size order); at most 8 listed per sign — "+N more (broad)" means the tape is broad, which the breadth column already says; a name drops off when its |z| falls back

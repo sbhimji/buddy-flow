@@ -29,6 +29,7 @@ import (
 	"buddy-flow/internal/breadth"
 	"buddy-flow/internal/bucket"
 	"buddy-flow/internal/capture"
+	"buddy-flow/internal/delta"
 	"buddy-flow/internal/devview"
 	"buddy-flow/internal/feed"
 	"buddy-flow/internal/flowshare"
@@ -134,6 +135,9 @@ func main() {
 		// extended-hours dollars concentrate before the bell; frozen at
 		// 09:30 as context for the day.
 		cols, rank, footer = premarket.New(store, unionStates).ExtendTrader(cols, rank, footer)
+		// MO-3: delta / class% after concentration_day (README order),
+		// read from the signed columns the time-ordered store classifies.
+		cols, footer = delta.New(store).ExtendTrader(cols, footer)
 		// Ticker view (ticker-view-v0): the crossings strip rides on every
 		// frame; every basket's drill-down goes to the -drill file for the
 		// frame server. No options tape here — conv_z/net_z are not

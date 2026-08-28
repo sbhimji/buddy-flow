@@ -23,6 +23,7 @@ import (
 
 	"buddy-flow/internal/breadth"
 	"buddy-flow/internal/bucket"
+	"buddy-flow/internal/delta"
 	"buddy-flow/internal/devview"
 	"buddy-flow/internal/feed"
 	"buddy-flow/internal/flowshare"
@@ -218,6 +219,10 @@ func main() {
 			// same composition as cmd/live so replays reproduce the
 			// trader's screen.
 			cols, rank, footer = premarket.New(store, unionStates).ExtendTrader(cols, rank, footer)
+			// MO-3: delta / class% after concentration_day (README order),
+			// read from the signed columns MO-2 stores; gaps on a store
+			// that recorded none.
+			cols, footer = delta.New(store).ExtendTrader(cols, footer)
 			// Ticker view (ticker-view-v0): crossings strip on every
 			// trader frame; drill-down under the -basket row; per-ticker
 			// options z only when the options tape + profiles are given.
@@ -257,6 +262,9 @@ func main() {
 			dv.Register(bc.DetailColumn())
 			dv.Register(vc.UpOnVolColumn())
 			dv.Register(vc.VolDetailColumn())
+			for _, c := range delta.New(store).DevColumns() {
+				dv.Register(c)
+			}
 		}
 	}
 	switch { // before Run starts (pipeline contract)

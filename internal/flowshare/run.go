@@ -281,25 +281,13 @@ func (r *Run) Since(rc *devview.RowCtx) (hhmm string, crossed, measured bool) {
 // (G1: cell and glyph share one predicate).
 func (r *Run) RunFlag(rc *devview.RowCtx) (lit, positive, ok bool) {
 	z, ok := r.FiveMinuteZ(rc)
-	if !ok {
-		return false, false, false
-	}
-	return z >= SignificantZ || z <= -SignificantZ, z > 0, true
+	return SignedFlag(z, ok, SignificantZ)
 }
 
 // runStyle is the T2 colour posture on 5m_z (R5): bold green at/beyond
-// +SignificantZ, bold red at/beyond −SignificantZ, nothing on a gap.
-func (r *Run) runStyle(rc *devview.RowCtx) string {
-	lit, positive, ok := r.RunFlag(rc)
-	switch {
-	case !ok || !lit:
-		return ""
-	case positive:
-		return sgrGreen
-	default:
-		return sgrRed
-	}
-}
+// +SignificantZ, bold red at/beyond −SignificantZ, nothing on a gap —
+// the flag's colour, so cell and glyph cannot disagree.
+func (r *Run) runStyle(rc *devview.RowCtx) string { return SGR(r.RunFlag(rc)) }
 
 func fmtZ(z float64, ok bool) string {
 	if !ok {

@@ -191,22 +191,43 @@ func FmtClass(v float64, ok bool) string {
 // ±DeltaHighlight (green positive, red negative), "" otherwise or on a
 // gap. The thin-basket and per-ticker gates wrap it.
 func Style(v float64, ok bool) string {
+	return sgr(Flag(v, ok))
+}
+
+// Flag is the Δ5 predicate the highlight and the MO-6 `δ` glyph share:
+// lit at or beyond ±DeltaHighlight, positive by sign, ok=false on a gap
+// (never lit). The thin-basket and per-ticker gates wrap it.
+func Flag(v float64, ok bool) (lit, positive, okOut bool) {
+	if !ok {
+		return false, false, false
+	}
+	return v >= DeltaHighlight || v <= -DeltaHighlight, v > 0, true
+}
+
+// BasketFlag applies the thin-basket rule before Flag: under the member or
+// dollar floor the basket is ok=false — the cell renders, but it is never
+// highlighted and its glyph never lights.
+func BasketFlag(m Minute, members int) (lit, positive, ok bool) {
+	if members < DeltaMinMembers || m.Counted < DeltaMinDollars {
+		return false, false, false
+	}
+	return Flag(m.Delta, m.DeltaOK)
+}
+
+// BasketStyle is BasketFlag's colour (the trader δ cell).
+func BasketStyle(m Minute, members int) string {
+	return sgr(BasketFlag(m, members))
+}
+
+func sgr(lit, positive, ok bool) string {
 	switch {
-	case !ok || (v < DeltaHighlight && v > -DeltaHighlight):
+	case !ok || !lit:
 		return ""
-	case v > 0:
+	case positive:
 		return sgrGreen
 	default:
 		return sgrRed
 	}
-}
-
-// BasketStyle applies the thin-basket rule before Style.
-func BasketStyle(m Minute, members int) string {
-	if members < DeltaMinMembers || m.Counted < DeltaMinDollars {
-		return ""
-	}
-	return Style(m.Delta, m.DeltaOK)
 }
 
 // TickerStyle applies the per-ticker floor before Style.
@@ -257,6 +278,14 @@ func (c *Calc) trailing(rc *devview.RowCtx) Minute {
 	m := Trailing(c.store, rc.Basket.States, rc.AtSec)
 	c.memo5[rc.Basket] = m
 	return m
+}
+
+// Flag is the MO-6 `δ` glyph predicate for a basket row: BasketFlag over
+// the same trailing window the trader δ cell renders — the cell's own
+// colour predicate (thin-basket rule included), so cell and glyph cannot
+// disagree.
+func (c *Calc) Flag(rc *devview.RowCtx) (lit, positive, ok bool) {
+	return BasketFlag(c.trailing(rc), len(rc.Basket.States))
 }
 
 // Columns is the trader pair — delta then class% (Δ3: wherever delta

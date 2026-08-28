@@ -296,18 +296,34 @@ func (c *Calc) Column(styled bool) devview.Column {
 // included). Shared by the 3.2 cell and the MO-1 merged cell so the
 // highlight has one owner.
 func (c *Calc) Style(rc *devview.RowCtx) string {
+	lit, positive, ok := c.Flag(rc)
+	switch {
+	case !ok || !lit:
+		return ""
+	case positive:
+		return sgrGreen
+	default:
+		return sgrRed
+	}
+}
+
+// Flag is the MO-6 `B` glyph predicate and the single owner of the T7
+// rule: lit when MORE than HighlightFrac of full membership is
+// persistently ↑ (positive) or ↓ (negative); ok=false when breadth gaps
+// (pre-horizon, SPY unmeasured) — never lit. Style is its colour.
+func (c *Calc) Flag(rc *devview.RowCtx) (lit, positive, ok bool) {
 	up, _, down, ok := c.count(rc.Basket.States, rc.AtSec)
 	if !ok {
-		return ""
+		return false, false, false
 	}
 	n := float64(len(rc.Basket.States))
 	switch {
 	case float64(up)/n > HighlightFrac:
-		return sgrGreen
+		return true, true, true
 	case float64(down)/n > HighlightFrac:
-		return sgrRed
+		return true, false, true
 	}
-	return ""
+	return false, false, true
 }
 
 // DetailColumn is the three-state detail (dev view only — the dev plan's

@@ -101,6 +101,41 @@ const (
 	sgrRed   = "\x1b[1;31m"
 )
 
+// SignedFlag is the shared |v| ≥ threshold predicate behind every signed
+// highlight (T2 posture): lit at or beyond ±threshold, positive by sign,
+// ok=false on a gap (never lit). The cell colour and the MO-6 glyph both
+// read it, so they cannot disagree (G1).
+func SignedFlag(v float64, ok bool, threshold float64) (lit, positive, okOut bool) {
+	if !ok {
+		return false, false, false
+	}
+	return v >= threshold || v <= -threshold, v > 0, true
+}
+
+// SGR is the T2 colour of a flag: bold green when lit and positive, bold
+// red when lit and negative, "" when unlit or on a gap.
+func SGR(lit, positive, ok bool) string {
+	switch {
+	case !ok || !lit:
+		return ""
+	case positive:
+		return sgrGreen
+	default:
+		return sgrRed
+	}
+}
+
+// CumZFlag is the MO-6 `Z` glyph predicate over a cum_share_z key —
+// TraderColumns returns that key as its rank (capture it before the
+// premarket wrapper takes the pre-open rank over). It is exactly the
+// cum_share_z cell's colour predicate: |z| ≥ SignificantZ, sign, gap.
+func CumZFlag(cumZ func(rc *devview.RowCtx) (float64, bool)) func(rc *devview.RowCtx) (lit, positive, ok bool) {
+	return func(rc *devview.RowCtx) (lit, positive, ok bool) {
+		z, ok := cumZ(rc)
+		return SignedFlag(z, ok, SignificantZ)
+	}
+}
+
 // Union resolves the D1 denominator — every distinct basket member, sorted
 // — against the symbol table. Errors on a member missing from the table
 // (universe.Load includes all members, so that means mismatched configs).
@@ -372,17 +407,8 @@ func (c *cells) cumShareZCol(style bool) devview.Column {
 		// T2: |z| ≥ SignificantZ renders bold green/red by SIGN — a
 		// statement of measurement (share above/below its own typical),
 		// never buy/sell language.
-		col.Style = func(rc *devview.RowCtx) string {
-			z, ok := c.cumZ(rc)
-			switch {
-			case !ok || z < SignificantZ && z > -SignificantZ:
-				return ""
-			case z > 0:
-				return sgrGreen
-			default:
-				return sgrRed
-			}
-		}
+		zflag := CumZFlag(c.cumZ)
+		col.Style = func(rc *devview.RowCtx) string { return SGR(zflag(rc)) }
 	}
 	return col
 }

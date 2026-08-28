@@ -151,15 +151,15 @@ func (s *Source) at(rc *devview.RowCtx) cell {
 // or beyond +SignificantZ, bold red at or beyond −SignificantZ, nothing
 // on a gap.
 func style(z float64, ok bool) string {
-	switch {
-	case !ok:
-		return ""
-	case z >= SignificantZ:
-		return sgrGreen
-	case z <= -SignificantZ:
-		return sgrRed
-	}
-	return ""
+	return flowshare.SGR(flowshare.SignedFlag(z, ok, SignificantZ))
+}
+
+// ConvFlag is the MO-6 `C` glyph predicate: the conv_z cell's own colour
+// predicate (|conv_z| ≥ SignificantZ, sign, gap) — net_z is unstyled and
+// has no glyph (MO-5 review: conv_z-only colour).
+func (s *Source) ConvFlag(rc *devview.RowCtx) (lit, positive, ok bool) {
+	c := s.at(rc)
+	return flowshare.SignedFlag(c.convZ, c.convOK, SignificantZ)
 }
 
 // Columns is the basket pair: last completed minute's basket sum through

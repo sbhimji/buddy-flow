@@ -26,6 +26,7 @@ import (
 	"buddy-flow/internal/delta"
 	"buddy-flow/internal/devview"
 	"buddy-flow/internal/feed"
+	"buddy-flow/internal/flags"
 	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
 	"buddy-flow/internal/optequity"
@@ -236,6 +237,11 @@ func main() {
 			dv.SetStatus(pc.Status)
 		case "trader":
 			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, vc.BreadthColumn(true))
+			// MO-6: the flags column reads each column's own colour
+			// predicate; the cum_share_z key is the rank before premarket
+			// wraps it, and every other slot is wired as its package lands
+			// below (an unwired slot stays unlit).
+			fl := flags.Set{Z: flowshare.CumZFlag(rank), R: run.RunFlag, B: bc.Flag, Dollar: vc.DollarFlag, Delta: dc.Flag}
 			// Premarket columns + pre-open rank (premarket-view-v0) —
 			// same composition as cmd/live so replays reproduce the
 			// trader's screen.
@@ -262,7 +268,11 @@ func main() {
 				}
 				cols, footer = src.ExtendTrader(cols, footer)
 				opts = src.Ticker
+				fl.Conv = src.ConvFlag
 			}
+			// MO-6: flags leftmost, after every slot's package has been
+			// composed (basket-level only; the drill-down keeps `since`).
+			cols, footer = fl.ExtendTrader(cols, footer)
 			// Ticker view (ticker-view-v0): crossings strip on every
 			// trader frame; drill-down under the -basket row.
 			tv, err := tickerview.New(store, table, bks, dv.Profiles(), floors, opts)

@@ -33,6 +33,7 @@ import (
 	"buddy-flow/internal/delta"
 	"buddy-flow/internal/devview"
 	"buddy-flow/internal/feed"
+	"buddy-flow/internal/flags"
 	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
 	"buddy-flow/internal/optequity"
@@ -147,6 +148,13 @@ func main() {
 		// per-ticker profiles.
 		vc := breadth.NewVol(bc, store, dv.Profiles())
 		cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, vc.BreadthColumn(true))
+		// MO-6: the flags column reads each column's own colour predicate;
+		// the cum_share_z key is the rank before premarket wraps it, and
+		// every other slot is wired as its package is composed below (an
+		// unwired slot — e.g. no options tape — stays unlit).
+		run := flowshare.NewRun(store, unionStates, shares, floors)
+		dc := delta.New(store)
+		fl := flags.Set{Z: flowshare.CumZFlag(rank), R: run.RunFlag, B: bc.Flag, Dollar: vc.DollarFlag, Delta: dc.Flag}
 		// Premarket columns + pre-open rank (premarket-view-v0): where
 		// extended-hours dollars concentrate before the bell; frozen at
 		// 09:30 as context for the day.
@@ -157,11 +165,11 @@ func main() {
 		// MO-8 run metrics: since / 5m_z after cum_share_z (one Run per
 		// process — the share series is rebuilt once per render second),
 		// then vs_SPY after 5m_z over breadth's own anchors.
-		cols, footer = flowshare.NewRun(store, unionStates, shares, floors).ExtendTrader(cols, footer)
+		cols, footer = run.ExtendTrader(cols, footer)
 		cols, footer = relperf.New(bc).ExtendTrader(cols, footer)
 		// MO-3: delta / class% after concentration_day (README order),
 		// read from the signed columns the time-ordered store classifies.
-		cols, footer = delta.New(store).ExtendTrader(cols, footer)
+		cols, footer = dc.ExtendTrader(cols, footer)
 		// MO-5: the options tape on the equity screen, live. A separate
 		// read-only follower over the day's options capture (MO-4; the
 		// options capture process is never touched — L4); basket
@@ -201,6 +209,7 @@ func main() {
 					follower = f
 					cols, footer = src.ExtendTrader(cols, footer)
 					opts = src.Ticker
+					fl.Conv = src.ConvFlag
 					// A tail error ends the follow early: say so once, on
 					// the log and on the clock line — the columns gap from
 					// there, which must not read as a quiet tape.
@@ -219,6 +228,9 @@ func main() {
 			}
 			status = optequity.Status(bc.Status, func() string { return optState.Load().(string) })
 		}
+		// MO-6: flags leftmost, after every slot's package has been
+		// composed (basket-level only; the drill-down keeps `since`).
+		cols, footer = fl.ExtendTrader(cols, footer)
 		// Ticker view (ticker-view-v0): the crossings strip rides on every
 		// frame; every basket's drill-down goes to the -drill file for the
 		// frame server.

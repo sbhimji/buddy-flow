@@ -208,6 +208,22 @@ func (vc *VolCalc) BreadthColumn(styled bool) devview.Column {
 // unusual volume / unmeasured (`7$ 2·`) over full membership — high `$`
 // with mixed price breadth reads as a two-sided fight, not a bid. Needs no
 // SPY, so it still renders on price-gapped rows.
+// DollarFlag is the MO-6 `$` glyph predicate (G3): of the ↑ members the
+// merged breadth cell counts, at least half are also on unusual volume,
+// and at least one — `7/9 5$` lights, `7/9 3$` does not. It reads the
+// same counts the cell prints, so the glyph is a restatement of the
+// visible `k$` term: lit ⇔ k ≥ 1 and 2k ≥ up. ok=false whenever the cell
+// prints no $ count (breadth gap, no ↑ member, volume side unmeasurable
+// or partially unmeasured — `·$`); unlit is the column's only "no".
+// Always positive: the term has no sign.
+func (vc *VolCalc) DollarFlag(rc *devview.RowCtx) (lit, positive, ok bool) {
+	_, _, up, upVol, unmUp, priceOK, volOK := vc.counts(rc.Basket.States, rc.AtSec)
+	if !priceOK || up == 0 || !volOK || unmUp > 0 {
+		return false, false, false
+	}
+	return upVol >= 1 && 2*upVol >= up, true, true
+}
+
 func (vc *VolCalc) VolDetailColumn() devview.Column {
 	return devview.Column{Name: "vol_detail", Width: 9,
 		Legend: "vol_detail = members on unusual volume $ / unmeasured ·",

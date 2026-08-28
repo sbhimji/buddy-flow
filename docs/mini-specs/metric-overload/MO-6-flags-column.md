@@ -1,6 +1,7 @@
 # MO-6 — `flags` column: coincidence glyphs, no composite
 
-Status: **open** (written 2026-08-26). Owner decision **O3** (README).
+Status: **implemented on branch mo-6-flags-column, awaiting review** (2026-08-28;
+written 2026-08-26; close notes below). Owner decision **O3** (README).
 Gated by MO-3 and MO-5 for the `δ` and `C` glyphs (a glyph whose metric is
 absent stays unlit; the column can ship earlier with fewer glyphs). Read
 first: `trader-view-v0.md` T2/T7, `ticker-view-v0.md` scope law ("no composite
@@ -64,3 +65,47 @@ Rendered e.g. `Z·B$δC` / `·····C` / `Z·····`. Width 6, left-aligned.
 
 O3; T2/T7 highlight rules; VB1–VB4; MO-3 Δ5; MO-5 colouring; MO-8 `5m_z`
 threshold; ticker-view-v0 scope law; §2.5; scope law.
+
+## Close notes (2026-08-28, branch `mo-6-flags-column`)
+
+- **Home.** New `internal/flags` (`flags.Set{Z,R,B,Dollar,Delta,Conv}`,
+  `Set.Render`, `Set.ExtendTrader` — leftmost column, footer block first).
+  The composer is NOT in `internal/flowshare` as the spec sketched:
+  `delta`'s tests and `optequity` itself import `flowshare`, and the footer
+  prints `delta.DeltaHighlight` / `breadth.HighlightFrac`, so a flowshare
+  import of those packages would cycle. flowshare instead exports the
+  shared signed predicate `SignedFlag(v, ok, threshold)`, its colour `SGR`,
+  and `CumZFlag(rank)` (the `Z` predicate over the cum_share_z key
+  `TraderColumns` returns as rank — captured in `cmd/live` / `cmd/replay`
+  before premarket wraps it).
+- **G1 predicates, one function per cell and glyph:** `flowshare.CumZFlag`
+  (cum_share_z Style now calls it), `flowshare.Run.RunFlag` (MO-8, unchanged
+  contract, now via `SignedFlag`), `breadth.Calc.Flag` (Style calls it),
+  `breadth.VolCalc.DollarFlag` (new, G3), `delta.Flag` / `delta.BasketFlag`
+  / `delta.Calc.Flag` (`Style` / `BasketStyle` call them),
+  `optequity.Source.ConvFlag` (cell `style` calls the same `SignedFlag`).
+- **`$` semantics as built:** lit ⇔ the merged cell prints `k$` with k ≥ 1
+  and 2k ≥ up; ok=false (unlit) whenever the cell prints no count — breadth
+  gap, `0/N`, `·$`. The glyph restates the visible cell, so the agreement
+  test checks it against the parsed breadth text.
+- **δ threshold discrepancy.** The spec table says `DeltaHighlight` 0.25;
+  the landed constant (MO-3 trader review) is **0.20** on the 5-minute
+  window. The glyph reuses the constant (0.20); the table above is stale.
+- **Wiring.** `cmd/replay` and `cmd/live` compose the Set after every
+  slot's package (options slot filled only when the tape is wired; nil slot
+  stays `·`). Basket-level only; the drill-down is untouched.
+- **Evidence (08-24 fixture, 04:00–10:00 cut).** 09:45:00 frame: byte-
+  identical to the a3cc60b baseline outside the flags column and its two
+  footer lines (rank order unchanged); agreement test 22 rows / 28 lit
+  signed glyphs, zero disagreements. **≥2-glyph minute: 09:41:00** —
+  `critical_minerals ZRB$·C` (five lit: cum +2.9σ, 5m +3.1σ, 1/7 red breadth
+  with 1$, conv_z −2.6σ), `power_equipment ··B·δC`; the in-run scan of
+  09:33–09:59 found 2+ lit on some row in every minute (red `B` on most
+  rows — a de-grossing morning, SPY −0.16%..−0.34%).
+- **Owner questions.** (1) `B` lit red on 17/22 rows at 09:45 makes the
+  column dense on a broad-down day; that IS the fingerprint, but the eye
+  may want `B` muted when it lights universe-wide (F18). (2) The `$`
+  half-rule lit on 1/7 ↑ with 1$ — one stock — which reads thin; a floor
+  of ≥2 on-volume members or "≥ half of N" is a ledger candidate. (3) Six
+  glyphs at 09:35 readable? `R` and `δ` and `C` gap until 09:35/09:33/
+  tape-minute, so early rows show ≤3 — probably fine, trader to confirm.

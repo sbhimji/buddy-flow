@@ -1,9 +1,9 @@
 // follow.go — the live dashboard as a separate read-only process (the
 // backlog's "trader view as a separate process"): tail the capture file the
 // feeder is writing, decode through the production path, and re-render the
-// basket table on an event-time cadence. Single goroutine end to end — the
-// follow loop renders inline, so no store locking is needed. Kill and
-// restart freely; the capture process never knows.
+// basket table on an event-time cadence. The follower itself is the shared
+// internal/optfollow (MO-4); this file is the terminal renderer around it.
+// Kill and restart freely; the capture process never knows.
 package main
 
 import (
@@ -11,13 +11,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync/atomic"
 	"syscall"
 	"time"
 
 	"buddy-flow/internal/conviction"
 	"buddy-flow/internal/optbucket"
-	"buddy-flow/internal/optclassify"
+	"buddy-flow/internal/optfollow"
 	"buddy-flow/internal/optingest"
 	"buddy-flow/internal/session"
 	"buddy-flow/internal/universe"
@@ -25,73 +24,37 @@ import (
 )
 
 func runFollow(capturePath, weightsPath, basketsCfg, profilesDir string, refresh time.Duration) error {
-	w, hash, err := optclassify.LoadWeights(weightsPath)
-	if err != nil {
-		return err
-	}
-	stamp := w.Version + "@" + hash
-	bks, err := universe.LoadBaskets(basketsCfg)
-	if err != nil {
-		return err
-	}
-	var base *conviction.Baselines
-	if profilesDir != "" {
-		if base, err = conviction.Load(profilesDir, bks, stamp); err != nil {
-			return err
-		}
-	}
-	store, err := optbucket.NewStore(w, stamp)
-	if err != nil {
-		return err
-	}
-	// The pipeline's consumer is the follow goroutine's only peer; renders
-	// happen from the Tick callback AFTER draining, so reads never race
-	// writes: drain-then-render is the whole synchronization story.
-	p := optingest.NewPipeline(0)
-	p.SetObserver(store)
-	pipeDone := make(chan struct{})
-	go func() { p.Run(); close(pipeDone) }()
-
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	manifest := filepath.Join(filepath.Dir(capturePath), "manifest.json")
-	sessionOver := func() bool {
-		_, err := os.Stat(manifest)
-		return err == nil
-	}
-	var stopped atomic.Bool
-	go func() { <-stop; stopped.Store(true) }()
 
-	var stats uwfeed.DecodeStats
-	v := &viewer{store: store, p: p, stats: &stats, bks: bks, base: base, refresh: refresh,
-		header: fmt.Sprintf("FOLLOW %s", filepath.Base(filepath.Dir(capturePath))) + "  (Ctrl-C to stop; exits when the session manifest appears)"}
-	// A scheduled follower may start before the feeder has created today's
-	// file; wait for it rather than failing the day's dashboard.
-	for {
-		if _, err := os.Stat(capturePath); err == nil || stopped.Load() {
-			break
-		}
-		fmt.Printf("waiting for %s to appear...\n", capturePath)
-		time.Sleep(15 * time.Second)
-	}
-	if stopped.Load() {
-		return nil
-	}
-	// First frame immediately: the served page must not show yesterday's
-	// last table marked stale while the market is still closed.
-	fmt.Print("\033[H\033[2J")
-	fmt.Printf("FOLLOW %s — connected to the capture; the options tape prints from 09:30 ET. Table appears with the first print.\n",
-		filepath.Base(filepath.Dir(capturePath)))
-	err = uwfeed.FollowCapture(capturePath, p, &stats, uwfeed.FollowOptions{
-		Poll: 250 * time.Millisecond,
-		Tick: func(int64) { v.render(false) },
-		Done: func() bool { return stopped.Load() || sessionOver() },
+	day := filepath.Base(filepath.Dir(capturePath))
+	v := &viewer{refresh: refresh,
+		header: fmt.Sprintf("FOLLOW %s", day) + "  (Ctrl-C to stop; exits when the session manifest appears)"}
+	f, err := optfollow.Start(optfollow.Config{
+		CapturePath: capturePath, WeightsPath: weightsPath, BasketsCfg: basketsCfg, ProfilesDir: profilesDir,
+		// Renders happen from the Tick callback AFTER draining, so reads
+		// never race writes: drain-then-render, as before.
+		Tick:    func(int64) { v.render(false) },
+		Waiting: func(path string) { fmt.Printf("waiting for %s to appear...\n", path) },
+		// First frame immediately: the served page must not show yesterday's
+		// last table marked stale while the market is still closed.
+		Opened: func() {
+			fmt.Print("\033[H\033[2J")
+			fmt.Printf("FOLLOW %s — connected to the capture; the options tape prints from 09:30 ET. Table appears with the first print.\n", day)
+		},
 	})
-	p.Close()
-	<-pipeDone
+	if err != nil {
+		return err
+	}
+	v.store, v.p, v.stats, v.bks, v.base = f.Store, f.Pipeline, f.Stats, f.Baskets, f.Base
+	go func() { <-stop; f.Signal() }()
+	<-f.Done()
+	if !f.Opened() {
+		return nil // stopped while still waiting for the file
+	}
 	v.render(true)
-	fmt.Printf("\nfollow ended: frames=%d prints=%d dupes=%d decode-errs=%d\n", stats.Frames, stats.Prints, p.Dupes.Load(), stats.DecodeErrs)
-	return err
+	fmt.Printf("\nfollow ended: frames=%d prints=%d dupes=%d decode-errs=%d\n", f.Stats.Frames, f.Stats.Prints, f.Pipeline.Dupes.Load(), f.Stats.DecodeErrs)
+	return f.Err()
 }
 
 // viewer renders the basket table on an event-time cadence. Drain-then-

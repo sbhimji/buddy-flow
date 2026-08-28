@@ -61,7 +61,11 @@ func renderSnapshot(store *optbucket.Store, baskets []universe.Basket, base *con
 			convZ: "·", netZ: "·",
 		}
 		if base != nil && lastMinStart+60 <= atSec { // only a COMPLETED minute has a z
-			cz, nz, cok, nok := base.Z(bk.Name, session.MinuteOfDay(lastMinStart*1_000_000_000), last.NetConviction, last.SignedNotional())
+			// The shared basket-minute aggregation (MO-4 F4) — the same
+			// arithmetic as `last` above over a completed minute, and the
+			// one the equity screen's conv_z/net_z will use.
+			conv, net := conviction.BasketMinute(conviction.StoreMinutes(store), bk.Members, lastMinStart)
+			cz, nz, cok, nok := base.Z(bk.Name, session.MinuteOfDay(lastMinStart*1_000_000_000), conv, net)
 			r.convZ, r.netZ = conviction.FormatZ(cz, cok), conviction.FormatZ(nz, nok)
 		}
 		rows = append(rows, r)

@@ -178,7 +178,24 @@ type Store struct {
 	// mu — the slow path only.
 	unknownPrints int64
 	unknownIDs    map[int32]int64
+
+	// Amendment ring (MO-8 review): every trade whose second is behind the
+	// latest second seen amends a bucket an incremental reader may already
+	// have summed. Each such write takes the next generation number and
+	// records its second in the ring; AmendedSince lets a reader learn the
+	// earliest amended second since the generation it last consumed, or
+	// that the ring has wrapped past it (full rebuild). Only trade writes
+	// matter — quotes carry no dollars. Guarded by mu.
+	maxSeenSec int64
+	amendGen   uint64
+	amendRing  [AmendRing]int64
 }
+
+// AmendRing is the amendment ring's capacity: generations older than the
+// current minus AmendRing are gone and AmendedSince reports ok=false. Late
+// prints run ~1% of the tape (MO-2), so a once-a-second reader sees tens
+// of amendments per render at the open — 4096 keeps a wide margin.
+const AmendRing = 4096
 
 // NewStore returns an empty store for a source that is NOT time-ordered
 // (flat-file replays, unit fixtures): no signed volume is recorded. Live and
@@ -249,6 +266,14 @@ func (s *Store) ObserveTrade(t *ingest.Trade) {
 			s.unknownIDs[id]++
 		}
 	}
+	sec := t.SipTs / 1e9
+	switch {
+	case sec > s.maxSeenSec:
+		s.maxSeenSec = sec
+	case sec < s.maxSeenSec:
+		s.amendGen++
+		s.amendRing[s.amendGen%AmendRing] = sec
+	}
 	b := s.bucketFor(t.State, t.SipTs)
 	b.Trades++
 	b.Shares += t.Size
@@ -289,6 +314,33 @@ func (s *Store) ObserveTrade(t *ingest.Trade) {
 	if r.Rule == aggressor.RuleQuote || r.Rule == aggressor.RuleMidpoint {
 		quote.add(&one)
 	}
+}
+
+// AmendedSince reports the buckets amended by trades written behind the
+// store's latest second since generation gen (a value a previous call
+// returned; 0 = the beginning): minSec is the earliest amended second and
+// newGen the generation to pass next time. minSec is meaningful only when
+// newGen != gen (nothing amended otherwise). ok=false when more than
+// AmendRing amendments have landed since gen — the ring has wrapped and
+// the reader cannot know how far back they reach: rebuild in full and
+// resume from newGen. A reader takes newGen BEFORE it reads the buckets
+// so a write landing during the read is caught by its next call.
+func (s *Store) AmendedSince(gen uint64) (minSec int64, newGen uint64, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	newGen = s.amendGen
+	if gen > newGen {
+		return 0, newGen, false // a generation from another store: rebuild
+	}
+	if newGen-gen > AmendRing {
+		return 0, newGen, false
+	}
+	for g := gen + 1; g <= newGen; g++ {
+		if sec := s.amendRing[g%AmendRing]; minSec == 0 || sec < minSec {
+			minSec = sec
+		}
+	}
+	return minSec, newGen, true
 }
 
 // ObserveQuote counts one NBBO update in its SIP-second bucket (D6: count

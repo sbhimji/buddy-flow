@@ -13,16 +13,20 @@
 // Gap rules: SPY unmeasurable or no completed minute → gap. A member with
 // no anchor or no price (breadth's "unmeasured") is EXCLUDED — an
 // equal-weighted mean has no in-line middle to fold it into — and the
-// dev view discloses the count (vs_SPY_n = measured/members). A basket
-// with zero measured members gaps: a mean over nothing is a fake
-// statement. Colour is the SPY status line's own dead-band (±breadth.DeadBand)
-// applied to the basket: green above, red below, none inside. Renders
-// are pure in (store state, second); every rendered string is a statement
-// of price measurement, never a recommendation.
+// dev view discloses the count (vs_SPY_n = measured/members). The mean
+// renders only over enough of the basket to speak for it: measured ≥
+// MinMeasured(N) = max(min(MinMeasuredAbs, N), ceil(N × MinMeasuredFrac))
+// (review 2026-08-27), else the gap — two of nine names are not the
+// sector. The trader cell is unstyled (review 2026-08-27: at ±10 bps the
+// colour lit 19–21 of 22 rows on a −0.3% SPY morning — weight, not
+// information); Flag keeps the dead-band predicate for MO-6 and the
+// ledger. Renders are pure in (store state, second); every rendered
+// string is a statement of price measurement, never a recommendation.
 package relperf
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"buddy-flow/internal/breadth"
@@ -34,12 +38,28 @@ import (
 // three cannot disagree about "in line with the index".
 const DeadBand = breadth.DeadBand
 
-const gap = "·"
-
+// Partial-membership floor: the mean renders only when at least
+// MinMeasured(N) members have an anchor and a price.
 const (
-	sgrGreen = "\x1b[1;32m"
-	sgrRed   = "\x1b[1;31m"
+	MinMeasuredAbs  = 3
+	MinMeasuredFrac = 0.5
 )
+
+// MinMeasured is the floor for a basket of n members:
+// max(min(MinMeasuredAbs, n), ceil(n × MinMeasuredFrac)).
+func MinMeasured(n int) int {
+	abs := MinMeasuredAbs
+	if n < abs {
+		abs = n
+	}
+	frac := int(math.Ceil(float64(n) * MinMeasuredFrac))
+	if frac > abs {
+		return frac
+	}
+	return abs
+}
+
+const gap = "·"
 
 // Calc is the per-render vs_SPY calc over a breadth.Calc. One per
 // process; the memo is per render second on the single render goroutine.
@@ -83,7 +103,7 @@ func (c *Calc) At(rc *devview.RowCtx) Cell {
 			sum += float64(r.Ret) - float64(spy)
 			v.Measured++
 		}
-		if v.Measured > 0 {
+		if v.Measured > 0 && v.Measured >= MinMeasured(v.Members) {
 			v.Mean, v.OK = sum/float64(v.Measured), true
 		}
 	}
@@ -92,7 +112,8 @@ func (c *Calc) At(rc *devview.RowCtx) Cell {
 }
 
 // Flag is the MO-6-style predicate: lit when the mean is beyond ±DeadBand,
-// positive by sign, ok=false on a gap — exactly when the cell is coloured.
+// positive by sign, ok=false on a gap. The cell itself is unstyled; this
+// is the predicate a glyph or the ledger reads.
 func (c *Calc) Flag(rc *devview.RowCtx) (lit, positive, ok bool) {
 	v := c.At(rc)
 	if !v.OK {
@@ -109,32 +130,16 @@ func Fmt(v Cell) string {
 	return fmt.Sprintf("%+.2f%%", 100*v.Mean)
 }
 
-func (c *Calc) style(rc *devview.RowCtx) string {
-	lit, positive, ok := c.Flag(rc)
-	switch {
-	case !ok || !lit:
-		return ""
-	case positive:
-		return sgrGreen
-	default:
-		return sgrRed
-	}
-}
-
-// Column is the vs_SPY cell; styled applies the dead-band colour (trader
-// view); the dev view renders plain like its other columns.
-func (c *Calc) Column(styled bool) devview.Column {
-	col := devview.Column{Name: "vs_SPY", Width: 7, Cell: func(rc *devview.RowCtx) string { return Fmt(c.At(rc)) }}
-	if styled {
-		col.Style = c.style
-	}
-	return col
+// Column is the vs_SPY cell — unstyled on both views (see the package
+// doc); the sign carries the read.
+func (c *Calc) Column() devview.Column {
+	return devview.Column{Name: "vs_SPY", Width: 7, Cell: func(rc *devview.RowCtx) string { return Fmt(c.At(rc)) }}
 }
 
 // DevColumns is the dev-view set: vs_SPY plus vs_SPY_n, the measured
 // count over membership the mean averages (R4 disclosure).
 func (c *Calc) DevColumns() []devview.Column {
-	col := c.Column(false)
+	col := c.Column()
 	col.Legend = "vs_SPY = equal-weighted mean of members' since-open return minus SPY's, completed minute; vs_SPY_n = members measured / members"
 	return []devview.Column{col,
 		{Name: "vs_SPY_n", Width: 8, Cell: func(rc *devview.RowCtx) string {
@@ -151,9 +156,9 @@ func (c *Calc) DevColumns() []devview.Column {
 // the three run columns as a row sentence. Statements of measurement
 // only; the dead-band text is built from the shared constant. Goes
 // through the scanner test.
-var Footer = fmt.Sprintf(`vs_SPY            = the basket's price move since the open minus SPY's, through the last completed minute: each stock's own %% change from its first print of the session, averaged with equal weight (the biggest name counts once, like the smallest), minus the index's — only stocks that have printed since the open are averaged; green above +%.2f%%, red below −%.2f%%, none in between (the same band as the SPY line)
+var Footer = fmt.Sprintf(`vs_SPY            = the basket's price move since the open minus SPY's, through the last completed minute: each stock's own %% change from its first print of the session, averaged with equal weight (the biggest name counts once, like the smallest), minus the index's — only stocks that have printed since the open are averaged, and the cell is · until at least %d of them (or half the basket, whichever is larger) have — a mean of two names is not the sector
 reading the row   = "+2.4σ since 09:41, 5m +1.8σ, +0.9%% vs SPY" reads: share above typical since 09:41, still above typical in the last five minutes, price ahead of the index; "+2.4σ since 09:33, 5m −0.2σ, flat vs SPY" reads: share was above typical from 09:33, the last five minutes are at typical, price with the index — measurements of what the tape has done, nothing more
-`, 100*DeadBand, 100*DeadBand)
+`, MinMeasuredAbs)
 
 // ExtendTrader inserts vs_SPY after 5m_z (README column order:
 // … since 5m_z vs_SPY breadth …) and the footer block before the
@@ -173,7 +178,7 @@ func (c *Calc) ExtendTrader(cols []devview.Column, footer string) ([]devview.Col
 	}
 	out := make([]devview.Column, 0, len(cols)+1)
 	out = append(out, cols[:at]...)
-	out = append(out, c.Column(true))
+	out = append(out, c.Column())
 	out = append(out, cols[at:]...)
 	i := strings.Index(footer, "\n·  ")
 	if i < 0 {

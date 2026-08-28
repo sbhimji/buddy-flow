@@ -35,7 +35,7 @@ recommendation.
   matched-bucket and σ-guarded; averaging five of them needs no new baseline
   and does not commit the medians-don't-commute sin (D7's reason). Gaps in
   any of the five minutes → gap (never a mean over fewer). Gap until five
-  completed session minutes (09:36 first render). `RunWindow = 5`, code
+  completed session minutes (09:35:00 first render). `RunWindow = 5`, code
   constant, ledger-tunable; the 15-minute variant §2.4 also names registers
   on the dev view as `15m_z` for comparison.
 - **R2 — `5m_z` is 3.7's input, not 3.7.** No CUSUM, no slope, no sentence
@@ -55,11 +55,12 @@ recommendation.
   equal-weighted (3.6: so the term measures the sector, not its largest
   member). Members without an anchor are excluded and the count is
   disclosed on the dev view (`vs_SPY_n`). SPY unmeasurable → gap. Rendered
-  `+0.92%`; coloured by the same ±10 bps dead-band as the SPY status line
-  (green above, red below, none inside) — the index's own posture rule,
-  applied to the basket.
+  `+0.92%`. *Review 2026-08-27:* the cell renders only when measured ≥
+  `MinMeasured(N)` = max(min(3, N), ceil(N/2)) (else the gap), and ships
+  **unstyled** — the ±10 bps dead-band survives as `relperf.Calc.Flag`
+  (MO-6) and as a ledger candidate (close notes).
 - **R5 — Colour and flags.** `5m_z` bold green/red at ±`SignificantZ`
-  (glyph `R`, MO-6). `since` unstyled. `vs_SPY` as R4.
+  (glyph `R`, MO-6). `since` unstyled. `vs_SPY` unstyled (R4 as reviewed).
 - **R6 — Estimator caveat, carried.** `flow_share_z` is a bounded-ratio z
   (less skewed than dollar z's) — `5m_z` inherits that; the log-space
   evaluation (MO-9) still lists it for the asymmetry count.
@@ -67,7 +68,7 @@ recommendation.
 ## Done when (replayed data)
 
 1. Unit: `5m_z` window boundaries (4 vs 5 completed minutes; a gap inside
-   the window; 09:36 first value); `since` first-crossing incl. cross-and-
+   the window; 09:35:00 first value); `since` first-crossing incl. cross-and-
    fall-back; `vs_SPY` equal-weight on a hand-built three-member basket incl.
    an un-anchored member; determinism.
 2. Replay `-view-mode trader -view-at 10:00:00` on the busiest 08-2x open:
@@ -92,18 +93,42 @@ recommendation.
   (beyond ±DeadBand); each is the cell's own colour predicate (G1).
   Constants: `flowshare.RunWindow = 5`, `flowshare.RunWindowLong = 15`,
   `relperf.DeadBand = breadth.DeadBand`.
-- **Series posture.** Every render rebuilds the union's completed-minute
-  series from the open (per member per minute: counted $ and
-  auction-inclusive $ — one `Window` read per member-minute, the same
-  pass shape `tickerview.prime` already makes). Nothing memoized across
-  renders (late prints amend completed buckets). The per-minute z's are
-  bit-identical to the dev view's `flow_share_z` (same single-minute
-  window, same union-order sums; `TestRunSeriesMatchesCells`). The
-  cumulative series accumulates minute sums while the `cum_share_z` cell
-  reads one whole-window sum — same buckets, same time order, different
-  float association (≈1e-16 relative): far below the rendered digit and
-  never a different basis; noted here so a one-ulp disagreement at an
-  exact `2.0` boundary is understood if it is ever seen.
+- **Series posture (review 2026-08-27: incremental).** The union's
+  completed-minute series lives on the `Run` for the session and grows by
+  one minute per minute — per new minute one `Window` read per member,
+  the full rebuild's recurrence restricted to a suffix, so the bytes are
+  identical by induction. Late prints: `bucket.Store` gained an amendment
+  ring (`AmendedSince(gen)` — every trade written behind the store's
+  latest second records its second; the reader truncates the series to
+  the earliest amended minute and recomputes the suffix; a wrapped ring
+  (`AmendRing` = 4096 since the last render) or a date change rebuilds
+  from the open). Basket z series extend lazily and are recomputed when
+  the membership slice's identity changes (hot-reload). The internal/bucket
+  change is the review-authorized hook only (+ `TestAmendedSince`).
+  Verified: `TestRunIncremental` (late print, two late prints, ring wrap,
+  membership replaced, new date, back to the first date — incremental ==
+  fresh rebuild at every step) and `TestRunIncrementalMatchesRebuildFixture`
+  (env-gated on the fixture path; replays 08-24 through the live decoder
+  and compares the three cells for all 22 baskets at every new session
+  second 09:30:00–10:00:00 against a fresh rebuild): PASS — 1801 render seconds x 22 baskets, 520,568 amendment generations seen (~290/s: the ring holds ~14 s at that rate), zero mismatches (77 s).
+  Per-render cost (`BenchmarkRunPrime`, dense synthetic tape — 164 members
+  printing every second; before = rebuild from the open, after = the
+  incremental step at a minute boundary; between boundaries a render is a
+  memo check):
+      before (rebuild from the open)   n=60: 24.9 ms/render   n=389: 113.1 ms/render
+      after  (incremental minute step)  n=60:  0.44 ms/minute  n=389:   0.58 ms/minute (other seconds: memo check)
+  The per-minute z's are bit-identical to the dev view's `flow_share_z`
+  (same single-minute window, same union-order sums;
+  `TestRunSeriesMatchesCells` compares the float operands). The cumulative
+  series accumulates minute sums while the `cum_share_z` cell reads one
+  whole-window sum — same buckets, same time order, different float
+  association (≈1e-16 relative): far below the rendered digit and never a
+  different basis. Follow-up (not done here — more than the hour the
+  review allowed): `tickerview.prime` still makes its own per-member-minute
+  pass; it needs per-minute cross dollars and the last minute's counted
+  shares beside what this series holds, so consuming the series means
+  widening it to a fourth/fifth column and re-pointing the drill-down's
+  reads. Ledger it as "one minute series, two readers".
 - **`since` blank vs gap (deviation from ticker-view-v0, flagged).** The
   ticker view renders blank both for "never crossed" and "nothing
   measurable". Here blank = every completed minute so far had a defined
@@ -111,13 +136,21 @@ recommendation.
   minute had a defined z (pre-open, no baseline). The contract's "gaps
   render ·" wins over the ticker view's convention; a blank inside an
   otherwise gapped row would read as a hole.
-- **Partial membership on `vs_SPY` (R4, flagged).** Mean over the members
-  that have an anchor and a last price; zero measured → gap. The trader
-  cell does not carry the count — `vs_SPY_n` is dev-view only per R4. On
-  08-24 every basket was fully measured (n/n on the dev view) at 10:00,
-  so the question is academic on this tape; a thin basket with two of nine names measured would still print
-  a mean. Owner call: keep (spec), add a minimum-measured floor, or show
-  the count on the trader cell.
+- **Partial membership on `vs_SPY` (R4; review 2026-08-27).** Mean over
+  the members that have an anchor and a last price, rendered only when
+  measured ≥ `relperf.MinMeasured(N)` = max(min(`MinMeasuredAbs` 3, N),
+  ceil(N × `MinMeasuredFrac` 0.5)) — else the gap; `vs_SPY_n` stays
+  dev-only. `TestMinMeasured` covers both sides of the floor. On 08-24
+  every basket was n/n at 10:00, so nothing on this tape gaps by the rule.
+- **`vs_SPY` ships unstyled (review 2026-08-27).** At the SPY line's
+  ±10 bps band the cell was red on 19–21 of 22 rows at every frame on a
+  −0.3% SPY morning — weight, not information (the MO-5 net_z argument).
+  `relperf.Calc.Flag` keeps the dead-band predicate for MO-6. Ledger
+  candidate: colour only when the basket's sign differs from the index's
+  (basket up on a down index or down on an up index), which on 08-24 would
+  have lit `neoclouds_dc_builders` at 09:36 (+1.32% on a −0.2% SPY) and
+  `proof_tier_ai_megacap` at 09:40/09:55/10:00 (+0.06 to +0.19%) and
+  nothing else — the rows where the price response actually diverged.
 - **First `5m_z` render.** Five completed session minutes exist at
   09:35:00 (09:30–09:34), so the first cell is 09:35:00, not the 09:36 the
   spec text says; the test pins 09:35:00 (`TestRunWindowBoundary`).
@@ -166,17 +199,8 @@ recommendation.
     rows (robotics 09:36 vs 09:55; power_equipment 09:36 vs 10:00). The
     spec's `+0.9% vs SPY` case did not occur on this tape — every real
     sentence ended "behind the index".
-- **Colour density (flagged).** `5m_z` lit 1–3 baskets per frame at ±2σ
-  (fine). `vs_SPY` at ±10 bps was red on 19–21 of 22 rows at every
-  frame: on a down tape the column is a wall of red and the colour adds
-  weight, not information (the MO-5 net_z argument). Owner call: keep
-  the SPY-line band, widen it for the basket mean, or leave `vs_SPY`
-  unstyled with the sign carrying the read.
-- **Cost note for cmd/live.** The series rebuild is n × |union| Window
-  reads per render second (390 × 164 at the close), the same order as
-  `tickerview.prime`; the two together double that pass. Not measured
-  under live load here (no-network rule); watch render time on the first
-  live afternoon.
+- **Colour density.** `5m_z` lit 1–3 baskets per frame at ±2σ (fine);
+  `vs_SPY` resolved above (unstyled).
 - Not run: the busiest 08-2x open (spec Done-when 2 names it) — the only
   fixture available to this story is 08-24 cut to 10:00; the 10:00:00
   frame on it is what was checked.

@@ -56,7 +56,7 @@ func at(rc *devview.RowCtx, sec int64) *devview.RowCtx {
 }
 
 // TestRunWindowBoundary: 5m_z gaps at four completed minutes and renders
-// at five (09:36:00 is the first render); the value is the mean of the
+// at five (09:35:00 is the first render); the value is the mean of the
 // five one-minute z's, in minute order.
 func TestRunWindowBoundary(t *testing.T) {
 	// shares 0.5 (z +4), 0.5, 0.25 (z 0), 0.375 (z +2), 0.5, 0.25
@@ -179,6 +179,7 @@ func TestRunSeriesMatchesCells(t *testing.T) {
 	// family, included in the cumulative one.
 	r.store.ObserveTrade(&ingest.Trade{State: rc.Basket.States[0], Price: 1, Size: 200, SipTs: (open + 1) * 1e9,
 		Cond: [ingest.MaxConditions]int32{18}, NCond: 1})
+	c := &cells{store: r.store, union: r.union, shares: r.shares, floors: r.floors}
 	cols := Columns(r.store, r.union, r.shares, r.floors)
 	cell := map[string]devview.Column{}
 	for _, c := range cols {
@@ -188,11 +189,18 @@ func TestRunSeriesMatchesCells(t *testing.T) {
 		rcs := at(rc, sec)
 		_, bs := r.basket(rcs)
 		n := len(bs.z)
-		if got := cell["flow_share_z"].Cell(rcs); got != fmtZ(bs.z[n-1], bs.zOK[n-1]) {
-			t.Errorf("at +%ds flow_share_z cell %q vs series %q", sec-open, got, fmtZ(bs.z[n-1], bs.zOK[n-1]))
+		// Float values, not rendered digits: the cells' own operands.
+		sh, shOK := c.prevShare(rcs)
+		z, zOK := ShareZ(sh, shOK, r.shares["x"], r.floors, session.OpenMinute+n-1)
+		if z != bs.z[n-1] || zOK != bs.zOK[n-1] {
+			t.Errorf("at +%ds flow_share_z cell %v,%v vs series %v,%v", sec-open, z, zOK, bs.z[n-1], bs.zOK[n-1])
+		}
+		cz, czOK := c.cumZ(rcs)
+		if cz != bs.cumZ[n-1] || czOK != bs.cumZOK[n-1] {
+			t.Errorf("at +%ds cum_share_z cell %v,%v vs series %v,%v", sec-open, cz, czOK, bs.cumZ[n-1], bs.cumZOK[n-1])
 		}
 		if got := cell["cum_share_z"].Cell(rcs); got != fmtZ(bs.cumZ[n-1], bs.cumZOK[n-1]) {
-			t.Errorf("at +%ds cum_share_z cell %q vs series %q", sec-open, got, fmtZ(bs.cumZ[n-1], bs.cumZOK[n-1]))
+			t.Errorf("at +%ds cum_share_z rendered %q vs series %q", sec-open, got, fmtZ(bs.cumZ[n-1], bs.cumZOK[n-1]))
 		}
 	}
 }

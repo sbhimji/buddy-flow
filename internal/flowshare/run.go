@@ -18,13 +18,20 @@ package flowshare
 // detector (R2): no CUSUM, no slope, no sentence here; display keeps full
 // membership (A6(e)).
 //
-// Series posture: every render rebuilds the completed-minute series from
-// the open (late prints amend completed buckets, so nothing is memoized
-// across renders — the winSnap rule). The cumulative series accumulates
-// per-minute window sums; the cum_share_z cell reads one whole-window
-// sum. Both are sums of the same buckets in time order and differ by at
-// most floating-point association (≈1e-16 relative) — far below the
-// rendered digit, and never a different basis.
+// Series posture: the union's completed-minute series lives on the Run
+// for the whole session and grows by one minute per minute — per new
+// minute one Window read per union member, the full rebuild's recurrence
+// restricted to a suffix, so the bytes are identical to a rebuild from
+// the open by induction (TestRunIncrementalMatchesRebuild pins it on the
+// replayed fixture, second by second). Late prints amend completed
+// buckets: the store's amendment ring (bucket.Store.AmendedSince) names
+// the earliest amended second since the last render, the series is
+// truncated to that minute and the suffix recomputed; a wrapped ring or
+// a date change rebuilds from the open. The cumulative series
+// accumulates per-minute window sums; the cum_share_z cell reads one
+// whole-window sum. Both are sums of the same buckets in time order and
+// differ by at most floating-point association (≈1e-16 relative) — far
+// below the rendered digit, and never a different basis.
 
 import (
 	"fmt"
@@ -48,9 +55,10 @@ const RunWindow = 5
 // (15m_z), for comparison at the ledger.
 const RunWindowLong = 15
 
-// Run is the per-render minute-series calc behind since / 5m_z / 15m_z.
-// One per process: the memo is per render second, on the single render
-// goroutine (the render loop, then the final render — never concurrently).
+// Run is the minute-series calc behind since / 5m_z / 15m_z. One per
+// process: the series persists across renders on the single render
+// goroutine (the render loop, then the final render — never
+// concurrently); per-render work is the memo turnover plus the suffix.
 type Run struct {
 	store  *bucket.Store
 	union  []*ingest.SymbolState
@@ -58,14 +66,15 @@ type Run struct {
 	floors *profile.Floors
 
 	memoAt  int64
+	gen     uint64 // store amendment generation the series has consumed
 	series  *minuteSeries
-	baskets map[*devview.BasketRow]basketSeries
+	baskets map[*devview.BasketRow]*basketSeries
 }
 
-// minuteSeries is the union's completed-minute history as of a render
-// second: per member per minute, counted dollars (the per-minute family's
-// slice) and auction-inclusive dollars (the cumulative family's slice),
-// plus the union totals each share divides by.
+// minuteSeries is the union's completed-minute history: per member per
+// minute, counted dollars (the per-minute family's slice) and cumulative
+// auction-inclusive dollars (the cumulative family's slice), plus the
+// union totals each share divides by. Every slice has length n.
 type minuteSeries struct {
 	openSec int64
 	n       int // completed session minutes, clamped at the close
@@ -75,8 +84,13 @@ type minuteSeries struct {
 	uniCum  []float64 // Σ union auction-inclusive dollars, open through minute i
 }
 
-// basketSeries is one basket's z series over the completed minutes.
+// basketSeries is one basket's z series over the completed minutes it has
+// been extended to (len(z) ≤ series.n; extended on access). states/nStates
+// record the membership slice's identity: a basket whose States slice is
+// replaced (hot-reload) is recomputed from the open.
 type basketSeries struct {
+	states      *ingest.SymbolState
+	nStates     int
 	z, cumZ     []float64
 	zOK, cumZOK []bool
 }
@@ -87,21 +101,22 @@ func NewRun(store *bucket.Store, union []*ingest.SymbolState, shares map[string]
 	return &Run{store: store, union: union, shares: shares, floors: floors}
 }
 
-// prime rebuilds the union series for the render second: open through the
-// end of the last completed minute, clamped at the close (post-close
+// prime brings the union series up to the render second: open through
+// the end of the last completed minute, clamped at the close (post-close
 // renders keep the whole day, the closing cross stays out — the cumWindow
-// deferral). n = 0 before the first completed session minute.
+// deferral). n = 0 before the first completed session minute. Within one
+// render second the series is touched once.
 func (r *Run) prime(atSec int64) *minuteSeries {
 	if r.memoAt == atSec && r.series != nil {
 		return r.series
 	}
-	r.memoAt, r.series, r.baskets = atSec, &minuteSeries{}, map[*devview.BasketRow]basketSeries{}
-	s := r.series
+	r.memoAt = atSec
 	date := session.Date(atSec * 1e9)
 	openSec, err1 := session.BucketStart(date, session.OpenMinute)
 	closeSec, err2 := session.BucketStart(date, session.CloseMinute)
 	if err1 != nil || err2 != nil {
-		return s
+		r.series, r.baskets = &minuteSeries{}, nil
+		return r.series
 	}
 	cmEnd := session.MinuteStart(atSec * 1e9)
 	if cmEnd > closeSec {
@@ -110,47 +125,96 @@ func (r *Run) prime(atSec int64) *minuteSeries {
 	if cmEnd < openSec {
 		cmEnd = openSec
 	}
-	n := int((cmEnd - openSec) / 60)
-	s.openSec, s.n = openSec, n
-	s.minD = make(map[*ingest.SymbolState][]float64, len(r.union))
-	s.cumD = make(map[*ingest.SymbolState][]float64, len(r.union))
-	s.uniMin, s.uniCum = make([]float64, n), make([]float64, n)
-	// Sums run in union order per minute, member cumulatives in time
-	// order — the same orders the cell snapshots use, so the same store
-	// state yields the same bytes on every render.
+	nNew := int((cmEnd - openSec) / 60)
+
+	// Take the generation BEFORE reading buckets: a write landing during
+	// the read is then reported by the next render's call.
+	minSec, gen, ok := r.store.AmendedSince(r.gen)
+	amended := gen != r.gen
+	r.gen = gen
+	s := r.series
+	k := 0 // first minute to (re)compute
+	switch {
+	case s == nil || s.openSec != openSec: // first render or a new date
+		s = &minuteSeries{openSec: openSec,
+			minD: make(map[*ingest.SymbolState][]float64, len(r.union)),
+			cumD: make(map[*ingest.SymbolState][]float64, len(r.union))}
+		r.series, r.baskets = s, nil
+	case !ok: // ring wrapped: how far back the amendments reach is unknown
+		k = 0
+	case amended && minSec < openSec+int64(s.n)*60:
+		if minSec > openSec {
+			k = int((minSec - openSec) / 60)
+		}
+	default:
+		k = s.n
+	}
+	if k > nNew {
+		k = nNew
+	}
+	r.extend(s, k, nNew)
+	return s
+}
+
+// extend truncates the series to k minutes and computes minutes k..n-1.
+// Per minute the union runs in union order, each member's cumulative
+// continues from its previous minute — the same additions in the same
+// order as a rebuild from the open, so the bytes cannot differ. Basket
+// series are truncated to k here and extended lazily on access.
+func (r *Run) extend(s *minuteSeries, k, n int) {
+	if k == s.n && n == s.n {
+		return
+	}
+	s.uniMin, s.uniCum = append(s.uniMin[:k], make([]float64, n-k)...), append(s.uniCum[:k], make([]float64, n-k)...)
 	for _, st := range r.union {
-		md, cd := make([]float64, n), make([]float64, n)
-		cum := 0.0
-		for i := 0; i < n; i++ {
-			from := openSec + int64(i)*60
+		md, cd := s.minD[st][:min(k, len(s.minD[st]))], s.cumD[st][:min(k, len(s.cumD[st]))]
+		for i := k; i < n; i++ {
+			from := s.openSec + int64(i)*60
 			b := r.store.Window(st, from, from+60)
 			_, d := profile.Counted(b)
 			_, ad := profile.CountedWithAuctions(b)
-			md[i] = float64(d)
+			cum := 0.0
+			if i > 0 {
+				cum = cd[i-1]
+			}
 			cum += float64(ad)
-			cd[i] = cum
+			md, cd = append(md, float64(d)), append(cd, cum)
 			s.uniMin[i] += float64(d)
 			s.uniCum[i] += cum
 		}
 		s.minD[st], s.cumD[st] = md, cd
 	}
-	return s
+	s.n = n
+	for _, bs := range r.baskets {
+		if len(bs.z) > k {
+			bs.z, bs.cumZ, bs.zOK, bs.cumZOK = bs.z[:k], bs.cumZ[:k], bs.zOK[:k], bs.cumZOK[:k]
+		}
+	}
 }
 
-// basket computes (once per basket per render) the basket's per-minute
-// flow_share_z and cum_share_z series — each minute through ShareZ /
+// basket extends the basket's per-minute flow_share_z and cum_share_z
+// series to the union series' length — each minute through ShareZ /
 // CumShareZ, the same gates and guard as the cells (a 0/0 minute, the
 // 10-day gate, and zguard's null all read as ok=false).
-func (r *Run) basket(rc *devview.RowCtx) (*minuteSeries, basketSeries) {
+func (r *Run) basket(rc *devview.RowCtx) (*minuteSeries, *basketSeries) {
 	s := r.prime(rc.AtSec)
-	if bs, ok := r.baskets[rc.Basket]; ok {
-		return s, bs
+	if r.baskets == nil {
+		r.baskets = map[*devview.BasketRow]*basketSeries{}
 	}
-	n := s.n
-	bs := basketSeries{z: make([]float64, n), cumZ: make([]float64, n), zOK: make([]bool, n), cumZOK: make([]bool, n)}
+	bs := r.baskets[rc.Basket]
+	var first *ingest.SymbolState
+	if len(rc.Basket.States) > 0 {
+		first = rc.Basket.States[0]
+	}
+	if bs == nil || bs.states != first || bs.nStates != len(rc.Basket.States) {
+		bs = &basketSeries{states: first, nStates: len(rc.Basket.States)}
+		r.baskets[rc.Basket] = bs
+	}
 	prof := r.shares[rc.Basket.Name]
-	if prof != nil {
-		for i := 0; i < n; i++ {
+	for i := len(bs.z); i < s.n; i++ {
+		var z, cz float64
+		var zOK, czOK bool
+		if prof != nil {
 			var bd, bc float64
 			for _, st := range rc.Basket.States {
 				bd += s.minD[st][i]
@@ -158,14 +222,14 @@ func (r *Run) basket(rc *devview.RowCtx) (*minuteSeries, basketSeries) {
 			}
 			key := session.OpenMinute + i
 			if s.uniMin[i] != 0 {
-				bs.z[i], bs.zOK[i] = ShareZ(bd/s.uniMin[i], true, prof, r.floors, key)
+				z, zOK = ShareZ(bd/s.uniMin[i], true, prof, r.floors, key)
 			}
 			if s.uniCum[i] != 0 {
-				bs.cumZ[i], bs.cumZOK[i] = CumShareZ(bc/s.uniCum[i], true, prof, r.floors, key)
+				cz, czOK = CumShareZ(bc/s.uniCum[i], true, prof, r.floors, key)
 			}
 		}
+		bs.z, bs.cumZ, bs.zOK, bs.cumZOK = append(bs.z, z), append(bs.cumZ, cz), append(bs.zOK, zOK), append(bs.cumZOK, czOK)
 	}
-	r.baskets[rc.Basket] = bs
 	return s, bs
 }
 
@@ -287,7 +351,7 @@ func (r *Run) DevColumns() []devview.Column {
 // as a row sentence. Statements of measurement only; the threshold text
 // is built from the shared constants so the legend can never drift from
 // the colour rule. Goes through the scanner test.
-var RunFooter = fmt.Sprintf(`since             = the ET minute cum_share_z first went beyond ±%.1fσ today (kept as the record even if it has since fallen back; a −%.1fσ crossing counts too — the sign is on the z beside it); blank = every completed minute so far stayed inside ±%.1fσ
+var RunFooter = fmt.Sprintf(`since             = the ET minute cum_share_z first went beyond ±%.1fσ today (kept as the record even if it has since fallen back; a −%.1fσ crossing counts too — the sign is on the z beside it); blank = every completed minute so far stayed inside ±%.1fσ; since 09:30 can be the opening auction alone
 5m_z              = the average of the last %d completed minutes' one-minute share z (each minute's share of universe dollars vs its own 20-day typical for that exact minute) — cum_share_z says how far today is from typical since the open, 5m_z says whether the last %d minutes are still there; bold at/beyond ±%.1fσ; · until %d completed minutes or when any of the %d has no baseline
 `, SignificantZ, SignificantZ, SignificantZ, RunWindow, RunWindow, SignificantZ, RunWindow, RunWindow)
 

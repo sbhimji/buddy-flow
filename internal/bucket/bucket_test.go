@@ -304,3 +304,50 @@ func TestFirstLastTradePrice(t *testing.T) {
 		t.Errorf("spy first = %v, %v; want 600, true", p, ok)
 	}
 }
+
+// TestAmendedSince (MO-8 review hook): a trade behind the latest second
+// is an amendment; forward and equal-second writes are not; generations
+// advance; the earliest amended second is reported; a wrapped ring
+// reports ok=false; quotes never amend.
+func TestAmendedSince(t *testing.T) {
+	table := ingest.NewTable([]string{"A"})
+	st := table.Lookup("A")
+	s := NewStore()
+	trade := func(sec int64) { s.ObserveTrade(&ingest.Trade{State: st, Price: 1, Size: 1, SipTs: sec * 1e9}) }
+	trade(100)
+	trade(105)
+	trade(105)
+	if _, gen, ok := s.AmendedSince(0); gen != 0 || !ok {
+		t.Fatalf("forward writes amended: gen %d ok %v", gen, ok)
+	}
+	trade(103)
+	trade(101)
+	trade(104)
+	minSec, gen, ok := s.AmendedSince(0)
+	if !ok || gen != 3 || minSec != 101 {
+		t.Fatalf("AmendedSince(0) = %d %d %v; want 101 3 true", minSec, gen, ok)
+	}
+	if _, g, ok := s.AmendedSince(gen); !ok || g != 3 {
+		t.Errorf("AmendedSince(3) = gen %d ok %v", g, ok)
+	}
+	s.ObserveQuote(&ingest.Quote{State: st, SipTs: 50 * 1e9})
+	if _, g, _ := s.AmendedSince(gen); g != 3 {
+		t.Error("a quote advanced the amendment generation")
+	}
+	trade(102)
+	if m, g, ok := s.AmendedSince(gen); !ok || g != 4 || m != 102 {
+		t.Errorf("AmendedSince(3) after one more = %d %d %v", m, g, ok)
+	}
+	for i := 0; i <= AmendRing; i++ {
+		trade(100)
+	}
+	if _, g, ok := s.AmendedSince(3); ok || g != 4+AmendRing+1 {
+		t.Errorf("wrapped ring: gen %d ok %v; want ok=false", g, ok)
+	}
+	if m, _, ok := s.AmendedSince(5); !ok || m != 100 {
+		t.Errorf("AmendedSince(5) = %d ok %v", m, ok)
+	}
+	if _, _, ok := s.AmendedSince(1 << 40); ok {
+		t.Error("future generation reported ok")
+	}
+}

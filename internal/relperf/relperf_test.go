@@ -55,25 +55,33 @@ func row(table *ingest.Table, atSec int64, syms ...string) *devview.RowCtx {
 // count says so.
 func TestEqualWeightExcludesUnmeasured(t *testing.T) {
 	c, table, open := synth(t)
-	rc := row(table, open+60+5, "A", "B", "C") // completed minute 09:30
+	rc := row(table, open+60+5, "A", "B", "C", "C") // completed minute 09:30; C twice, never trades
 	v := c.At(rc)
-	// ((0.03 − 0.01) + (0 − 0.01)) / 2 = 0.005
-	if !v.OK || v.Measured != 2 || v.Members != 3 {
+	// A, B measured of four: excluded members counted, and under the
+	// floor (max(min(3,4), 2) = 3) the mean gaps — TestMinMeasured has
+	// both sides; here the exclusion and the count.
+	if v.OK || v.Measured != 2 || v.Members != 4 {
 		t.Fatalf("cell = %+v", v)
 	}
-	if got := Fmt(v); got != "+0.50%" {
-		t.Errorf("vs_SPY = %q, want +0.50%%", got)
+	rc = row(table, open+60+5, "A", "B")
+	v = c.At(rc)
+	// ((0.03 − 0.01) + (0 − 0.01)) / 2 = 0.005
+	if !v.OK || v.Measured != 2 || v.Members != 2 || Fmt(v) != "+0.50%" {
+		t.Errorf("vs_SPY = %+v %q, want +0.50%%", v, Fmt(v))
 	}
-	col := c.Column(true)
+	col := c.Column()
 	if col.Name != "vs_SPY" || col.Cell(rc) != "+0.50%" {
 		t.Errorf("column %s = %q", col.Name, col.Cell(rc))
 	}
-	if got := col.Style(rc); got != sgrGreen {
-		t.Errorf("style = %q, want green beyond +0.10%%", got)
+	if col.Style != nil {
+		t.Error("vs_SPY is styled; review 2026-08-27 ships it unstyled")
+	}
+	if lit, pos, ok := c.Flag(rc); !lit || !pos || !ok {
+		t.Errorf("Flag = %v %v %v; want lit positive ok beyond +0.10%%", lit, pos, ok)
 	}
 	dev := c.DevColumns()
-	if got := dev[1].Cell(rc); dev[1].Name != "vs_SPY_n" || got != "2/3" {
-		t.Errorf("vs_SPY_n = %q, want 2/3", got)
+	if got := dev[1].Cell(rc); dev[1].Name != "vs_SPY_n" || got != "2/2" {
+		t.Errorf("vs_SPY_n = %q, want 2/2", got)
 	}
 	// D joins once it has an anchor (second completed minute): mean over
 	// A, B, D = (0.02 − 0.01 − 0.005)/3 = 0.005/3.
@@ -84,22 +92,57 @@ func TestEqualWeightExcludesUnmeasured(t *testing.T) {
 	}
 }
 
-// TestDeadBand: inside ±10 bps no colour; below −10 bps red.
+// TestDeadBand: Flag is unlit inside ±10 bps, lit negative below. The
+// baskets list B more than once on purpose — membership is whatever the
+// caller passes, and the duplicate weights B's 0% again to land the mean
+// exactly where the case needs it (A +2%, B −1%, B −1% → 0).
 func TestDeadBand(t *testing.T) {
 	c, table, open := synth(t)
-	col := c.Column(true)
-	// B alone: 0 − 1% = −1.00% → red.
-	rcB := row(table, open+60+5, "B")
-	if got, sgr := col.Cell(rcB), col.Style(rcB); got != "-1.00%" || sgr != sgrRed {
-		t.Errorf("B = %q %q", got, sgr)
-	}
-	// A, B, B: (0.02 − 0.01 − 0.01)/3 = 0 → inside the band, no colour.
+	col := c.Column()
+	// A, B, B (three measured of three): (0.02 − 0.01 − 0.01)/3 = 0.
 	rc0 := row(table, open+60+5, "A", "B", "B")
-	if got, sgr := col.Cell(rc0), col.Style(rc0); got != "+0.00%" || sgr != "" {
-		t.Errorf("flat = %q %q", got, sgr)
+	if got := col.Cell(rc0); got != "+0.00%" {
+		t.Errorf("flat = %q", got)
 	}
 	if lit, _, ok := c.Flag(rc0); lit || !ok {
 		t.Errorf("Flag inside the band = lit %v ok %v", lit, ok)
+	}
+	// B, B, B: −1.00% → lit, negative.
+	rcB := row(table, open+60+5, "B", "B", "B")
+	if got := col.Cell(rcB); got != "-1.00%" {
+		t.Errorf("B = %q", got)
+	}
+	if lit, pos, ok := c.Flag(rcB); !lit || pos || !ok {
+		t.Errorf("Flag below the band = %v %v %v", lit, pos, ok)
+	}
+}
+
+// TestMinMeasured: the partial-membership floor, both sides.
+func TestMinMeasured(t *testing.T) {
+	for n, want := range map[int]int{1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: 3, 7: 4, 9: 5, 12: 6, 15: 8} {
+		if got := MinMeasured(n); got != want {
+			t.Errorf("MinMeasured(%d) = %d, want %d", n, got, want)
+		}
+	}
+	c, table, open := synth(t)
+	col := c.Column()
+	// A, B, C: 2 of 3 measured < 3 → gap; A, B alone (2 of 2) → renders.
+	if got := col.Cell(row(table, open+60+5, "A", "B", "C")); got != gap {
+		t.Errorf("2 of 3 measured rendered %q, want %q", got, gap)
+	}
+	if got := col.Cell(row(table, open+60+5, "A", "B")); got != "+0.50%" {
+		t.Errorf("2 of 2 measured = %q, want +0.50%%", got)
+	}
+	// Four members: at the first minute A, B measured (2 < 3 → gap); from
+	// the second minute D has an anchor too (3 ≥ 3 → renders).
+	if got := col.Cell(row(table, open+60+5, "A", "B", "C", "D")); got != gap {
+		t.Errorf("2 of 4 measured rendered %q, want %q", got, gap)
+	}
+	if got := col.Cell(row(table, open+2*60, "A", "B", "C", "D")); got != "+0.17%" {
+		t.Errorf("3 of 4 measured = %q, want +0.17%%", got)
+	}
+	if got := c.DevColumns()[1].Cell(row(table, open+60+5, "A", "B", "C", "D")); got != gap {
+		t.Errorf("vs_SPY_n on a gapped cell = %q, want %q", got, gap)
 	}
 }
 
@@ -107,16 +150,13 @@ func TestDeadBand(t *testing.T) {
 // member measured — all the gap, never a number, never a style.
 func TestGaps(t *testing.T) {
 	c, table, open := synth(t)
-	col := c.Column(true)
+	col := c.Column()
 	for name, rc := range map[string]*devview.RowCtx{
 		"pre-first-minute":   row(table, open+30, "A", "B"),
 		"no member measured": row(table, open+60+5, "C"),
 	} {
 		if got := col.Cell(rc); got != gap {
 			t.Errorf("%s: %q, want %q", name, got, gap)
-		}
-		if got := col.Style(rc); got != "" {
-			t.Errorf("%s: styled %q", name, got)
 		}
 		if _, _, ok := c.Flag(rc); ok {
 			t.Errorf("%s: Flag ok", name)
@@ -131,7 +171,7 @@ func TestGaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := New(bc).Column(true).Cell(row(table2, open+60+5, "A")); got != gap {
+	if got := New(bc).Column().Cell(row(table2, open+60+5, "A")); got != gap {
 		t.Errorf("SPY unmeasurable: %q, want %q", got, gap)
 	}
 }
@@ -140,10 +180,10 @@ func TestGaps(t *testing.T) {
 // turns over with the second.
 func TestDeterminism(t *testing.T) {
 	c, table, open := synth(t)
-	col := c.Column(true)
+	col := c.Column()
 	rc := row(table, open+2*60+5, "A", "B", "C", "D")
-	a := col.Style(rc) + col.Cell(rc)
-	if b := col.Style(rc) + col.Cell(rc); a != b {
+	a := col.Cell(rc)
+	if b := col.Cell(rc); a != b {
 		t.Errorf("%q vs %q", a, b)
 	}
 	if v := c.At(row(table, open+60+5, "A", "B", "C", "D")); v.Measured != 2 {
@@ -174,7 +214,7 @@ func TestExtendTrader(t *testing.T) {
 			t.Errorf("footer contains %q — scope law", banned)
 		}
 	}
-	if !strings.Contains(Footer, "+0.10%") || !strings.Contains(Footer, "since 09:41") {
+	if !strings.Contains(Footer, "at least 3 of them") || !strings.Contains(Footer, "since 09:41") {
 		t.Errorf("footer lacks the band or the reading guide:\n%s", Footer)
 	}
 	mustPanic := func(name string, f func()) {

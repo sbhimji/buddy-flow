@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 
+	"buddy-flow/internal/aggressor"
 	"buddy-flow/internal/classify"
 	"buddy-flow/internal/ingest"
 	"buddy-flow/internal/session"
@@ -47,6 +48,15 @@ type ClassAgg struct {
 // is the reader's job via the per-class fields. LastPrice/LastSipTs are the
 // raw tape's last print in the bucket (by SIP ts, arrival order breaking
 // ties), unfiltered by class — a price-forming "last" is a Phase 3 concern.
+//
+// Signed volume (MO-2 / story 3.3): AskSide and BidSide hold the eligible
+// prints (CONTINUOUS + BLOCK) the aggressor cascade classified at/above the
+// ask or at/below the bid; TickRule counts eligible prints that reached the
+// tick rule (whichever way they landed) — the F2 data-quality number; Late
+// counts eligible prints skipped as late. Unclassified is derived
+// (Eligible − AskSide − BidSide), never stored. These are stored, not
+// recomputed, because the book they were classified against is gone by
+// read time (1.4 "store what cannot be derived").
 type Bucket struct {
 	Trades    int64
 	Shares    float64
@@ -55,6 +65,10 @@ type Bucket struct {
 	LastSipTs int64
 	Quotes    int64
 	Class     [NumClasses]ClassAgg
+	AskSide   ClassAgg
+	BidSide   ClassAgg
+	TickRule  int64
+	Late      int64
 }
 
 func (b *Bucket) add(o *Bucket) {
@@ -66,9 +80,41 @@ func (b *Bucket) add(o *Bucket) {
 		b.LastPrice, b.LastSipTs = o.LastPrice, o.LastSipTs
 	}
 	for i := range b.Class {
-		b.Class[i].Trades += o.Class[i].Trades
-		b.Class[i].Shares += o.Class[i].Shares
-		b.Class[i].Dollars += o.Class[i].Dollars
+		b.Class[i].add(&o.Class[i])
+	}
+	b.AskSide.add(&o.AskSide)
+	b.BidSide.add(&o.BidSide)
+	b.TickRule += o.TickRule
+	b.Late += o.Late
+}
+
+func (c *ClassAgg) add(o *ClassAgg) {
+	c.Trades += o.Trades
+	c.Shares += o.Shares
+	c.Dollars += o.Dollars
+}
+
+// Eligible is the aggressor cascade's denominator: every print whose class
+// enters the cascade (aggressor.Eligible), regardless of how it landed.
+func (b *Bucket) Eligible() ClassAgg {
+	var out ClassAgg
+	for c := range b.Class {
+		if aggressor.Eligible(classify.Class(c)) {
+			out.add(&b.Class[c])
+		}
+	}
+	return out
+}
+
+// Unclassified is derived at read time, never stored: Eligible − AskSide −
+// BidSide (late prints and invalid-book prints included — denominator only,
+// the D15 posture).
+func (b *Bucket) Unclassified() ClassAgg {
+	e := b.Eligible()
+	return ClassAgg{
+		Trades:  e.Trades - b.AskSide.Trades - b.BidSide.Trades,
+		Shares:  e.Shares - b.AskSide.Shares - b.BidSide.Shares,
+		Dollars: e.Dollars - b.AskSide.Dollars - b.BidSide.Dollars,
 	}
 }
 
@@ -78,6 +124,11 @@ func (b *Bucket) add(o *Bucket) {
 type Store struct {
 	mu      sync.Mutex
 	buckets map[*ingest.SymbolState]map[int64]*Bucket
+
+	// Per-symbol aggressor state (tick reference, quote usability). Written
+	// only from the pipeline goroutine under mu; see aggressor.State for why
+	// it lives here and not in SymbolState.
+	agg map[*ingest.SymbolState]*aggressor.State
 
 	// Unknown-condition tripwire (0.3: quarantined + tripwired). Guarded by
 	// mu — the slow path only.
@@ -89,8 +140,18 @@ type Store struct {
 func NewStore() *Store {
 	return &Store{
 		buckets:    map[*ingest.SymbolState]map[int64]*Bucket{},
+		agg:        map[*ingest.SymbolState]*aggressor.State{},
 		unknownIDs: map[int32]int64{},
 	}
+}
+
+func (s *Store) aggFor(st *ingest.SymbolState) *aggressor.State {
+	a := s.agg[st]
+	if a == nil {
+		a = &aggressor.State{}
+		s.agg[st] = a
+	}
+	return a
 }
 
 func (s *Store) bucketFor(st *ingest.SymbolState, sipNs int64) *Bucket {
@@ -108,7 +169,9 @@ func (s *Store) bucketFor(st *ingest.SymbolState, sipNs int64) *Bucket {
 	return b
 }
 
-// ObserveTrade aggregates one print into its SIP-second bucket.
+// ObserveTrade aggregates one print into its SIP-second bucket and, for
+// eligible prints, classifies it against the book as of arrival (the
+// pipeline applied every earlier quote before calling here).
 func (s *Store) ObserveTrade(t *ingest.Trade) {
 	class, unknown := classify.Classify(t.Cond[:t.NCond])
 	// The explicit conversion forces the product to round to float64 before
@@ -136,6 +199,29 @@ func (s *Store) ObserveTrade(t *ingest.Trade) {
 	c.Trades++
 	c.Shares += t.Size
 	c.Dollars += dollars
+
+	r := s.aggFor(t.State).Classify(t, class)
+	if !r.Eligible {
+		return
+	}
+	if r.Late {
+		b.Late++
+	}
+	if r.TickRule {
+		b.TickRule++
+	}
+	var side *ClassAgg
+	switch r.Side {
+	case aggressor.AskSide:
+		side = &b.AskSide
+	case aggressor.BidSide:
+		side = &b.BidSide
+	default:
+		return
+	}
+	side.Trades++
+	side.Shares += t.Size
+	side.Dollars += dollars
 }
 
 // ObserveQuote counts one NBBO update in its SIP-second bucket (D6: count
@@ -144,6 +230,26 @@ func (s *Store) ObserveQuote(q *ingest.Quote) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.bucketFor(q.State, q.SipTs).Quotes++
+	s.aggFor(q.State).ObserveQuote(q)
+}
+
+// Aggressor sums the store-wide honesty tally (MO-2 S5) from the buckets —
+// the same numbers a reader derives from the file, so the printed line and
+// the persisted columns cannot disagree.
+func (s *Store) Aggressor() aggressor.Stats {
+	var out aggressor.Stats
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.buckets {
+		for _, b := range m {
+			out.Eligible += b.Eligible().Trades
+			out.Ask += b.AskSide.Trades
+			out.Bid += b.BidSide.Trades
+			out.Tick += b.TickRule
+			out.Late += b.Late
+		}
+	}
+	return out
 }
 
 // Window sums one symbol's buckets over [fromSec, toSec) into a value copy
@@ -244,17 +350,29 @@ func (s *Store) Rows() []Row {
 	return rows
 }
 
-// header returns the self-describing CSV header. Column names for classes
-// come from the classify table (lowercased), so the file documents the
-// policy vocabulary it was written under; 3.3 adds columns without breaking
-// old files — the reader maps columns by name.
-func header() []string {
+// baseHeader returns the 1.4 columns — the permanent required base. Column
+// names for classes come from the classify table (lowercased), so the file
+// documents the policy vocabulary it was written under.
+func baseHeader() []string {
 	cols := []string{"second", "symbol", "trades", "shares", "dollars", "last_price", "last_sip_ns", "quotes"}
 	for c := 0; c < NumClasses; c++ {
 		name := strings.ToLower(classify.Class(c).String())
 		cols = append(cols, name+"_trades", name+"_shares", name+"_dollars")
 	}
 	return cols
+}
+
+// signedHeader returns the MO-2 signed-volume columns (S4) — additive and
+// OPTIONAL on read: a pre-MO-2 file lacks them and loads with
+// Session.HasSigned=false.
+func signedHeader() []string {
+	return []string{"ask_trades", "ask_shares", "ask_dollars", "bid_trades", "bid_shares", "bid_dollars", "tick_rule", "late"}
+}
+
+// header returns the self-describing CSV header written today: base, then
+// signed. The reader maps columns by name, never by position.
+func header() []string {
+	return append(baseHeader(), signedHeader()...)
 }
 
 // fnum formats a float with the shortest representation that round-trips
@@ -285,7 +403,7 @@ func (s *Store) WriteCSV(path string) (int, error) {
 		f.Close()
 		return 0, err
 	}
-	cols := make([]string, 0, 8+3*NumClasses)
+	cols := make([]string, 0, 8+3*NumClasses+8)
 	for i := range rows {
 		r := &rows[i]
 		b := &r.Bucket
@@ -299,6 +417,10 @@ func (s *Store) WriteCSV(path string) (int, error) {
 			ca := &b.Class[c]
 			cols = append(cols, strconv.FormatInt(ca.Trades, 10), fnum(ca.Shares), fnum(ca.Dollars))
 		}
+		for _, sa := range []*ClassAgg{&b.AskSide, &b.BidSide} {
+			cols = append(cols, strconv.FormatInt(sa.Trades, 10), fnum(sa.Shares), fnum(sa.Dollars))
+		}
+		cols = append(cols, strconv.FormatInt(b.TickRule, 10), strconv.FormatInt(b.Late, 10))
 		if err := write(cols); err != nil {
 			f.Close()
 			return 0, err

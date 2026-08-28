@@ -311,6 +311,7 @@ func main() {
 		} else {
 			reportTripwire(store) // -view-only runs still build a store; its tripwire must still be read
 		}
+		reportAggressor(store, p.CondOverflow.Load())
 		return
 	}
 
@@ -421,6 +422,18 @@ func main() {
 		os.Exit(3) // bad input file — distinct from exit 1 (lost messages) and 2 (flag misuse)
 	}
 	writeBuckets(store, *bucketsPath)
+	reportAggressor(store, p.CondOverflow.Load())
+}
+
+// reportAggressor prints the MO-2 honesty line (S5) next to the session
+// stats: the measured ask/bid/tick/late/unclassified split of eligible
+// prints. The tick share is the F2 data-quality number — reported, never
+// hidden. Nil-safe (runs without a store built no classification).
+func reportAggressor(store *bucket.Store, condOverflow int64) {
+	if store == nil {
+		return
+	}
+	fmt.Println(store.Aggressor().Line(condOverflow))
 }
 
 // loadOptions binds the replayed day's options bucket file (7.4) and the

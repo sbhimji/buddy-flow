@@ -1,6 +1,6 @@
 # MO-2 — Signed volume into the 1-second store (dev-plan 3.3, part 1)
 
-Status: **open** (written 2026-08-26). Story: DEV-PLAN Phase 3 → 3.3 [F2],
+Status: **implemented on branch mo-2-signed-volume, awaiting review** (2026-08-27; written 2026-08-26). Story: DEV-PLAN Phase 3 → 3.3 [F2],
 split in two: this spec is the classifier + storage; MO-3 is the view.
 Gated by MO-1 (column order settled). **This is the only story in the folder
 that touches `internal/ingest` and `internal/bucket`.** Read first:

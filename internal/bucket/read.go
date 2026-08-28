@@ -17,6 +17,11 @@ import (
 // can see the universe; this reader only answers per-symbol lookups.
 type Session struct {
 	rows map[string]map[int64]Bucket
+
+	// HasSigned is false when the file predates MO-2 (no ask_*/bid_*/
+	// tick_rule/late columns): the signed fields of every Bucket are then
+	// "not recorded", never zero measurements — readers render a gap.
+	HasSigned bool
 }
 
 // ReadCSV loads a session bucket file (plain or .gz — D4 gzips after close).
@@ -63,15 +68,29 @@ func ReadCSV(path string) (*Session, error) {
 		}
 		return i, nil
 	}
-	want := header()
+	want := baseHeader()
 	pos := make([]int, len(want))
 	for i, name := range want {
 		if pos[i], err = col(name); err != nil {
 			return nil, err
 		}
 	}
+	// Signed columns (MO-2): optional as a set — all present or none. A
+	// partial set is a corrupt header, not an old file.
+	signed := signedHeader()
+	spos := make([]int, len(signed))
+	nSigned := 0
+	for i, name := range signed {
+		if j, ok := idx[name]; ok {
+			spos[i] = j
+			nSigned++
+		}
+	}
+	if nSigned != 0 && nSigned != len(signed) {
+		return nil, fmt.Errorf("%s: %d of %d signed-volume columns present; expected all or none", path, nSigned, len(signed))
+	}
 
-	s := &Session{rows: map[string]map[int64]Bucket{}}
+	s := &Session{rows: map[string]map[int64]Bucket{}, HasSigned: nSigned == len(signed)}
 	line := 1
 	for sc.Scan() {
 		line++
@@ -110,6 +129,13 @@ func ReadCSV(path string) (*Session, error) {
 			b.Class[c].Trades = pInt(get(8 + 3*c))
 			b.Class[c].Shares = pF(get(9 + 3*c))
 			b.Class[c].Dollars = pF(get(10 + 3*c))
+		}
+		if s.HasSigned {
+			sget := func(i int) string { return fields[spos[i]] }
+			b.AskSide = ClassAgg{Trades: pInt(sget(0)), Shares: pF(sget(1)), Dollars: pF(sget(2))}
+			b.BidSide = ClassAgg{Trades: pInt(sget(3)), Shares: pF(sget(4)), Dollars: pF(sget(5))}
+			b.TickRule = pInt(sget(6))
+			b.Late = pInt(sget(7))
 		}
 		if perr != nil {
 			return nil, fmt.Errorf("%s:%d: %w", path, line, perr)

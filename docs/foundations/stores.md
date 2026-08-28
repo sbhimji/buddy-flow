@@ -32,8 +32,9 @@ data/capture/<date>/stream.jsonl ◄╌╌ compare ╌┤
         ▼
    Observer seam → BUCKET STORE (RAM: 1-second × ticker aggregates,
         │          class-split per 0.3; the single storage resolution)
-        │          [3.3 will add a print classifier here — the one metric
-        │          that needs the at-that-moment NBBO before it's gone]
+        │          + aggressor cascade (3.3 / MO-2, `internal/aggressor`):
+        │          each eligible print classified against the at-that-moment
+        │          NBBO before it's gone → ask-side / bid-side sums stored
         │
         │ session close (cmd/live) / -buckets (cmd/replay)
         ▼
@@ -84,9 +85,28 @@ we check ourselves against.
 
 The **single storage resolution of the instrument**: one aggregate per
 (ticker, 1-second), all session — trades, shares, dollars, last price, quote
-count, split by print class (0.3). The invariant: 1-second all day, coarser
-views (minutes, rolling windows) are always *derived* at read time, never
-stored — a mid-day resolution seam would distort CUSUM and slopes.
+count, split by print class (0.3), plus **signed volume** (3.3 / MO-2):
+ask-side and bid-side (trades, shares, dollars) of the eligible prints
+(CONTINUOUS + BLOCK) classified by `internal/aggressor` against the NBBO as
+of arrival, the count that reached the tick rule (`tick_rule` — the F2
+data-quality number), and the count skipped as late (`late`, tolerance 1s).
+Unclassified is derived at read time (eligible − ask − bid), never stored.
+Signed sums are stored, not recomputed, because the book they were
+classified against is gone by read time. The invariant: 1-second all day,
+coarser views (minutes, rolling windows) are always *derived* at read time,
+never stored — a mid-day resolution seam would distort CUSUM and slopes.
+
+CSV columns are mapped by header name, never by position. The eight signed
+columns (`ask_trades, ask_shares, ask_dollars, bid_trades, bid_shares,
+bid_dollars, tick_rule, late`) are additive and **optional on read**: a file
+written before MO-2 loads with `Session.HasSigned = false`, and every signed
+read from it is "not recorded" — rendered as a gap, never as zero.
+`.trades-only.csv` bootstrap files stay `HasSigned = false` forever (no
+quotes, no book). Every capture-derived day regenerates with the signed
+columns by replay; pre-existing columns are unchanged by the regeneration.
+The `aggressor:` line printed by `cmd/live` and `cmd/replay` at session end
+is the same tally summed from these columns (eligible, ask%, bid%, tick%,
+late%, unclassified%).
 
 Two forms of the same thing:
 - **In RAM** (`bucket.Store`): filled live during a session or replay by the

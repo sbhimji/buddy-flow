@@ -276,6 +276,9 @@ func main() {
 			fmt.Printf("buckets: %d (second,symbol) rows -> %s\n", rows, writePath)
 		}
 	}
+	// MO-2 honesty line (S5): the measured aggressor split of eligible
+	// prints, next to the done: stats. `!!` when CondOverflow is nonzero.
+	fmt.Println(store.Aggressor().Line(p.CondOverflow.Load()))
 	if n, ids := store.Unknown(); n > 0 {
 		fmt.Printf("!! tripwire: %d prints carried condition IDs missing from the 0.3 table: %v\n", n, ids)
 	}

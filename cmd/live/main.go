@@ -38,6 +38,7 @@ import (
 	"buddy-flow/internal/optequity"
 	"buddy-flow/internal/optfollow"
 	"buddy-flow/internal/premarket"
+	"buddy-flow/internal/relperf"
 	"buddy-flow/internal/tickerview"
 	"buddy-flow/internal/universe"
 )
@@ -153,6 +154,11 @@ func main() {
 		// so the union window pass runs once per second, not twice.
 		pc := premarket.New(store, unionStates)
 		cols, rank, footer = pc.ExtendTrader(cols, rank, footer)
+		// MO-8 run metrics: since / 5m_z after cum_share_z (one Run per
+		// process — the share series is rebuilt once per render second),
+		// then vs_SPY after 5m_z over breadth's own anchors.
+		cols, footer = flowshare.NewRun(store, unionStates, shares, floors).ExtendTrader(cols, footer)
+		cols, footer = relperf.New(bc).ExtendTrader(cols, footer)
 		// MO-3: delta / class% after concentration_day (README order),
 		// read from the signed columns the time-ordered store classifies.
 		cols, footer = delta.New(store).ExtendTrader(cols, footer)

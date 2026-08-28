@@ -30,6 +30,7 @@ import (
 	"buddy-flow/internal/ingest"
 	"buddy-flow/internal/optequity"
 	"buddy-flow/internal/premarket"
+	"buddy-flow/internal/relperf"
 	"buddy-flow/internal/session"
 	"buddy-flow/internal/tickerview"
 	"buddy-flow/internal/universe"
@@ -215,6 +216,10 @@ func main() {
 		// MO-3: delta / class% from the signed columns MO-2 stores; one
 		// Calc serves whichever column set is composed.
 		dc := delta.New(store)
+		// MO-8 run metrics: since/5m_z from the share series (one Run per
+		// process) and vs_SPY over breadth's own anchors (relperf).
+		run := flowshare.NewRun(store, unionStates, shares, floors)
+		rp := relperf.New(bc)
 		// One premarket Calc per process (its memo serves whichever
 		// frame is composed).
 		pc := premarket.New(store, unionStates)
@@ -235,6 +240,10 @@ func main() {
 			// same composition as cmd/live so replays reproduce the
 			// trader's screen.
 			cols, rank, footer = pc.ExtendTrader(cols, rank, footer)
+			// MO-8: since / 5m_z after cum_share_z, then vs_SPY after 5m_z
+			// (README order: … cum_share_z since 5m_z vs_SPY breadth …).
+			cols, footer = run.ExtendTrader(cols, footer)
+			cols, footer = rp.ExtendTrader(cols, footer)
 			// After concentration_day (README order); gaps on a store
 			// that recorded no classification.
 			cols, footer = dc.ExtendTrader(cols, footer)
@@ -286,6 +295,12 @@ func main() {
 			dv.Register(vc.UpOnVolColumn())
 			dv.Register(vc.VolDetailColumn())
 			for _, c := range dc.DevColumns() {
+				dv.Register(c)
+			}
+			for _, c := range run.DevColumns() {
+				dv.Register(c)
+			}
+			for _, c := range rp.DevColumns() {
 				dv.Register(c)
 			}
 		}

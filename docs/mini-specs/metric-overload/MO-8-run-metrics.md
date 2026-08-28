@@ -1,6 +1,6 @@
 # MO-8 — Run metrics: `since`, `5m_z`, `vs_SPY`
 
-Status: **open** (written 2026-08-26). The "is there a run to chase" story
+Status: **implemented on branch mo-8-run-metrics, awaiting review** (written 2026-08-26; implemented 2026-08-27). The "is there a run to chase" story
 (README question → metric map). Owner decision O2: after signed volume and
 the prune. Gated by MO-1 (column order). Read first: `3.1-flowshare.md`
 (D5 per-minute `flow_share_z` — the atom; D7 cum family), `3.2-breadth.md`
@@ -78,6 +78,108 @@ recommendation.
    equivalents, on a replayed morning and recorded in the close notes — the
    story is accepted when a run and a spent run are visibly different rows.
 4. Footer scanner passes; rank unchanged.
+
+## Close notes (2026-08-27, branch `mo-8-run-metrics`)
+
+- **Homes.** `since` / `5m_z` (+ dev `15m_z`): `internal/flowshare/run.go`,
+  `flowshare.Run` — one per process, `NewRun(store, union, shares, floors)`,
+  `ExtendTrader` anchored after `cum_share_z` (panics on a miss, delta's
+  posture). `vs_SPY` (+ dev `vs_SPY_n`): new `internal/relperf` over a new
+  `breadth.Calc.Returns` accessor (every member's since-open return and
+  SPY's, from breadth's own anchors and last prices — no price math in
+  relperf), `ExtendTrader` anchored after `5m_z`. Predicates for MO-6:
+  `Run.RunFlag` (`R`: |5m_z| ≥ SignificantZ) and `relperf.Calc.Flag`
+  (beyond ±DeadBand); each is the cell's own colour predicate (G1).
+  Constants: `flowshare.RunWindow = 5`, `flowshare.RunWindowLong = 15`,
+  `relperf.DeadBand = breadth.DeadBand`.
+- **Series posture.** Every render rebuilds the union's completed-minute
+  series from the open (per member per minute: counted $ and
+  auction-inclusive $ — one `Window` read per member-minute, the same
+  pass shape `tickerview.prime` already makes). Nothing memoized across
+  renders (late prints amend completed buckets). The per-minute z's are
+  bit-identical to the dev view's `flow_share_z` (same single-minute
+  window, same union-order sums; `TestRunSeriesMatchesCells`). The
+  cumulative series accumulates minute sums while the `cum_share_z` cell
+  reads one whole-window sum — same buckets, same time order, different
+  float association (≈1e-16 relative): far below the rendered digit and
+  never a different basis; noted here so a one-ulp disagreement at an
+  exact `2.0` boundary is understood if it is ever seen.
+- **`since` blank vs gap (deviation from ticker-view-v0, flagged).** The
+  ticker view renders blank both for "never crossed" and "nothing
+  measurable". Here blank = every completed minute so far had a defined
+  `cum_share_z` inside ±2σ (a measurement: no crossing yet); `·` = no
+  minute had a defined z (pre-open, no baseline). The contract's "gaps
+  render ·" wins over the ticker view's convention; a blank inside an
+  otherwise gapped row would read as a hole.
+- **Partial membership on `vs_SPY` (R4, flagged).** Mean over the members
+  that have an anchor and a last price; zero measured → gap. The trader
+  cell does not carry the count — `vs_SPY_n` is dev-view only per R4. On
+  08-24 every basket was fully measured (n/n on the dev view) at 10:00,
+  so the question is academic on this tape; a thin basket with two of nine names measured would still print
+  a mean. Owner call: keep (spec), add a minimum-measured floor, or show
+  the count on the trader cell.
+- **First `5m_z` render.** Five completed session minutes exist at
+  09:35:00 (09:30–09:34), so the first cell is 09:35:00, not the 09:36 the
+  spec text says; the test pins 09:35:00 (`TestRunWindowBoundary`).
+- **Frames (08-24 fixture, 2679ad0 baseline vs this branch, same
+  `-options-*` flags as MO-5):** at 09:45:00 and 10:00:00 every column
+  other than `since`/`5m_z`/`vs_SPY` (and the three footer lines + the
+  reading guide) is byte-identical to the baseline
+  (`scratchpad/mo-8/strip_cols.py`, `diff` empty); two 09:45 renders
+  byte-identical; rank unchanged.
+- **Python recomputation at 10:00 (window 09:55–09:59)** from the bucket
+  CSV + `data/profiles/baskets/*.csv` + `_floors.csv` + tape anchors
+  (`scratchpad/mo-8/recompute.py`), all matching the rendered digits:
+  critical_minerals 5m_z +0.6 (minutes −0.13 +0.50 −0.05 +1.54 +1.32),
+  since 09:36, vs_SPY −1.24% (7/7); robotics_av +0.5 / 09:30 / −2.45%
+  (5/5); semis_analog_power_auto +1.9 / blank (cum z −0.02) / −1.55%;
+  proof_tier_ai_megacap +0.2 / blank / +0.19%. SPY −0.18% since open.
+- **Trader read, 08-24 09:36–10:00** (SPY −0.34% at 09:45, −0.18% at
+  10:00; breadth red nearly everywhere; grid in
+  `scratchpad/mo-8/tabulate.py` output):
+  - *Live run, then spent:* `robotics_av` at 09:36 read
+    `+5.2σ since 09:30, 5m +3.6σ, −2.08% vs SPY` (TSLA 96% of the basket
+    — dollars far above typical, still arriving, price 2% behind the
+    index); by 09:45 `+2.4σ since 09:30, 5m +0.7σ, −2.76%` and by 09:55
+    `+2.4σ since 09:30, 5m +0.1σ, −2.88%` — the level held for twenty
+    minutes after the flow normalised, which is exactly the case the
+    story exists for.
+  - *A run that started later:* `critical_minerals` crossed at 09:36
+    (`+2.9σ since 09:36, 5m +3.3σ, −0.58% vs SPY` on the 09:40 frame,
+    CLF +11.7σ on the strip), faded (09:50: `5m +0.2σ`), then a second
+    leg (09:55: `+2.1σ since 09:36, 5m +2.1σ, −1.59%`).
+  - *Spent:* `power_equipment` 09:36 `+1.7σ, 5m +3.8σ` (recency ahead of
+    level — HUBB's 09:34 crossing), since 09:36 recorded, then
+    `+0.5σ since 09:36, 5m −0.5σ, −0.86% vs SPY` at 10:00;
+    `semicap_frontend` `+2.1σ since 09:30` at 09:36 → `+0.5σ, 5m −0.9σ` at
+    09:50.
+  - *Pressure without level:* `epc_labor` and `semis_compute` at 09:45
+    (`5m +2.3σ` with cum z +1.1 / +0.9, no since) and
+    `semis_analog_power_auto` at 10:00 (`5m +1.9σ`, cum z −0.0) — the
+    `R` glyph would light with `Z` dark, the reverse of robotics at 09:55.
+  - `vs_SPY` was negative for 21 of 22 baskets at most frames (−0.4% to
+    −3.9%) on a −0.2% to −0.3% index: the morning's flow runs were not
+    price runs, which the column states plainly; `neoclouds_dc_builders`
+    +1.32% (8/11 ↑) at 09:36 → −0.43% at 09:40 is the one five-minute
+    price reversal on the grid.
+  - The row sentence works: a live and a spent run are visibly different
+    rows (robotics 09:36 vs 09:55; power_equipment 09:36 vs 10:00). The
+    spec's `+0.9% vs SPY` case did not occur on this tape — every real
+    sentence ended "behind the index".
+- **Colour density (flagged).** `5m_z` lit 1–3 baskets per frame at ±2σ
+  (fine). `vs_SPY` at ±10 bps was red on 19–21 of 22 rows at every
+  frame: on a down tape the column is a wall of red and the colour adds
+  weight, not information (the MO-5 net_z argument). Owner call: keep
+  the SPY-line band, widen it for the basket mean, or leave `vs_SPY`
+  unstyled with the sign carrying the read.
+- **Cost note for cmd/live.** The series rebuild is n × |union| Window
+  reads per render second (390 × 164 at the close), the same order as
+  `tickerview.prime`; the two together double that pass. Not measured
+  under live load here (no-network rule); watch render time on the first
+  live afternoon.
+- Not run: the busiest 08-2x open (spec Done-when 2 names it) — the only
+  fixture available to this story is 08-24 cut to 10:00; the 10:00:00
+  frame on it is what was checked.
 
 ## Decisions consumed
 

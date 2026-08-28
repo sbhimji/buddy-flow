@@ -21,7 +21,7 @@ them.
 | 2 | `R` | `|5m_z| ≥ SignificantZ` | green +, red − | MO-8 (unlit until then) |
 | 3 | `B` | breadth > `HighlightFrac` (0.70) ↑ or ↓ | green ↑, red ↓ | breadth |
 | 4 | `$` | unusual-volume members ≥ half of the ↑ members (and ≥1) | green | breadth/volume |
-| 5 | `δ` | `|delta| ≥ DeltaHighlight` (0.25) | green +, red − | MO-3 |
+| 5 | `δ` | `|delta| ≥ DeltaHighlight` (0.20, MO-3 review) | green +, red − | MO-3 |
 | 6 | `C` | `|conv_z| ≥ SignificantZ` | green +, red − | MO-5 |
 
 Rendered e.g. `Z·B$δC` / `·····C` / `Z·····`. Width 6, left-aligned.
@@ -90,7 +90,7 @@ threshold; ticker-view-v0 scope law; §2.5; scope law.
   test checks it against the parsed breadth text.
 - **δ threshold discrepancy.** The spec table says `DeltaHighlight` 0.25;
   the landed constant (MO-3 trader review) is **0.20** on the 5-minute
-  window. The glyph reuses the constant (0.20); the table above is stale.
+  window. The glyph reuses the constant (0.20); the table above was corrected at review (2026-08-28).
 - **Wiring.** `cmd/replay` and `cmd/live` compose the Set after every
   slot's package (options slot filled only when the tape is wired; nil slot
   stays `·`). Basket-level only; the drill-down is untouched.

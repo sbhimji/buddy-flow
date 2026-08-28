@@ -272,11 +272,14 @@ var breadthRE = regexp.MustCompile(`^(\d+)/(\d+)(?:\s+(\S+)\$)?$`)
 // from the "HH:MM:SS ET" line through the footer, as cmd/replay -view-at
 // prints it). For every basket row, each glyph is lit ⇔ its cell is
 // styled, in the same colour; `$` restates the breadth cell's own count.
-// Skips when the file is not given (acceptance evidence, not CI input).
+// Defaults to testdata/trader-2026-08-24-094100.txt — the 08-24 fixture's
+// 09:41:00 frame (five glyphs lit on critical_minerals), checked in ANSI
+// intact as the permanent glyph == cell regression; TRADER_FRAME overrides
+// it with any other rendered frame.
 func TestFlagsAgreeWithCells(t *testing.T) {
 	path := os.Getenv("TRADER_FRAME")
 	if path == "" {
-		t.Skip("TRADER_FRAME not set")
+		path = "testdata/trader-2026-08-24-094100.txt"
 	}
 	f, err := os.Open(path)
 	if err != nil {

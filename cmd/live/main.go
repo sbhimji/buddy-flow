@@ -92,7 +92,7 @@ func main() {
 	}
 	table := ingest.NewTable(syms)
 	p := ingest.NewPipeline(table, 0)
-	store := bucket.NewStore()
+	store := bucket.NewTimeOrderedStore() // the websocket is one time-ordered stream: signed volume is recorded
 
 	// Operational logs go to stderr when the view owns stdout — `2>live.log`
 	// gives a clean table plus a complete log (trader-view-v0 T3).
@@ -276,12 +276,9 @@ func main() {
 			fmt.Printf("buckets: %d (second,symbol) rows -> %s\n", rows, writePath)
 		}
 	}
-	// MO-2 honesty line (S5): the measured aggressor split of eligible
-	// prints, next to the done: stats. `!!` when CondOverflow is nonzero.
-	fmt.Println(store.Aggressor().Line(p.CondOverflow.Load()))
-	if n, ids := store.Unknown(); n > 0 {
-		fmt.Printf("!! tripwire: %d prints carried condition IDs missing from the 0.3 table: %v\n", n, ids)
-	}
+	// Store summary next to the done: stats — tripwire + MO-2 aggressor
+	// honesty line, the same path cmd/replay uses.
+	bucket.Report(os.Stdout, store, p.CondOverflow.Load())
 	if exitCode != 0 {
 		os.Exit(exitCode)
 	}

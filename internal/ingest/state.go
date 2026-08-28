@@ -4,6 +4,8 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+
+	"buddy-flow/internal/classify"
 )
 
 // SymbolState is all per-symbol state the core maintains: the current NBBO
@@ -27,6 +29,7 @@ type SymbolState struct {
 	bidExch, askExch   int32
 	quoteTs            int64 // SipTs of the quote that set the NBBO
 	quoteSeq           int64
+	usable             bool // classify.QuoteUsable of that quote's conditions (3.3 book validity)
 
 	// Counters. Trades/Quotes are the reconciliation numbers (mini-spec
 	// done-when #1). SeqRegress counts sequence_number going backwards per
@@ -48,6 +51,10 @@ type NBBO struct {
 	BidExch, AskExch   int32
 	Ts                 int64
 	Seq                int64
+	// Usable: the quote that set this book carried no condition that makes
+	// the NBBO unusable for aggressor classification (classify.QuoteUsable).
+	// Stamped here so the book and its validity are one snapshot.
+	Usable bool
 }
 
 // NBBO returns the current book under the symbol's lock.
@@ -59,6 +66,7 @@ func (s *SymbolState) NBBO() NBBO {
 		BidSize: s.bidSize, AskSize: s.askSize,
 		BidExch: s.bidExch, AskExch: s.askExch,
 		Ts: s.quoteTs, Seq: s.quoteSeq,
+		Usable: s.usable,
 	}
 }
 
@@ -85,6 +93,7 @@ func (s *SymbolState) applyQuote(q *Quote) {
 	s.bidSize, s.askSize = q.BidSize, q.AskSize
 	s.bidExch, s.askExch = q.BidExch, q.AskExch
 	s.quoteTs, s.quoteSeq = q.SipTs, q.Seq
+	s.usable = classify.QuoteUsable(q.Cond[:q.NCond])
 	s.mu.Unlock()
 }
 

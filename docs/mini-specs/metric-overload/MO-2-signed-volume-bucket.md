@@ -85,10 +85,13 @@ arrival, identical in live and replay.
   `CondOverflow` nonzero → the line is prefixed `!!` (ingest-cap note).
 - **S6 — Backfill the corpus.** Every recorded capture carries quotes, so
   `cmd/replay -capture <day> -buckets` regenerates that day's bucket file with
-  the signed columns. Flat-file days replayed with `-trades -quotes` likewise;
-  `.trades-only.csv` days stay `HasSigned=false` forever (honest). The
-  regenerated files are byte-identical to the old ones in every pre-existing
-  column (checked by diffing the projected columns).
+  the signed columns. Flat-file days never get them: `-trades -quotes`
+  streams two ticker-sorted files concurrently, so the book at
+  classification time is scheduler-dependent — that store never runs the
+  cascade and writes no signed columns (review B1); `.trades-only.csv` days
+  likewise stay `HasSigned=false` forever (honest). The regenerated files
+  are byte-identical to the old ones in every pre-existing column (checked
+  by diffing the projected columns).
 - **S7 — Per-print truth is not claimed.** Package doc states, verbatim from
   the dev plan: midpoint / price-improved retail executions fall to the tick
   rule; DeltaRatio is an aggregate approximation, not print-level truth;
@@ -119,3 +122,45 @@ arrival, identical in live and replay.
 DEV-PLAN 3.3 cascade + vendor note + on-time amendment + ingest-cap note;
 D9 (consumed by MO-3); D15 precedent (unclassified in the denominator only);
 0.3 print inclusion + quote-condition appendix; 1.4 store rule; F2; scope law.
+
+## Close notes (review batch applied 2026-08-27, branch `mo-2-signed-volume`)
+
+Review amendments to the cascade above, all in `internal/aggressor`:
+eligibility is **CONTINUOUS only** (BLOCK executes outside the quote —
+print-inclusion.md is normative; BLOCK dollars stay in any downstream Counted
+denominator, never signed); step 4 gained the **midpoint rule** (true
+Lee-Ready: `mid = (Bid+Ask)/2`; above → AskSide, below → BidSide, exactly mid
+→ tick rule) so only exact-midpoint prints reach the tick rule; a **locked
+book** treats its one price as the midpoint; quote usability is stamped into
+`ingest.NBBO.Usable` by `applyQuote` so book and validity are one snapshot;
+the store family is **14 columns** — `ask_*`, `bid_*` (totals over every
+rule), `quote_ask_*`, `quote_bid_*` (quote + midpoint rules; tick share =
+total − quote), `tick_rule`, `late` — all-or-none on read; `Bucket.Signed`
+is a pointer, nil = not recorded, so absence propagates through
+`add`/`Window`/`DeriveMinute` and `Unclassified()` returns ok=false; only a
+**time-ordered** store (`bucket.NewTimeOrderedStore`: live, `-capture`)
+records signed volume; `bucket.Report` is the one end-of-session summary
+path for both binaries.
+
+First measured split, 2026-08-24 capture (04:00–10:00 ET fixture; eligible
+prints all in 09:30–10:00; two replays byte-identical):
+
+    before B2 (tick rule for every inside print, BLOCK eligible):
+      aggressor: eligible=4002448 ask=47.5% bid=51.4% tick=59.6% late=1.1% unclassified=1.2%
+    after B2/S1/S4, book as of arrival (SHIPPED):
+      aggressor: eligible=4002448 ask=49.4% bid=49.4% quote=84.7% tick=14.1% late=1.1% nobook=0.1% unclassified(incl late)=1.2%
+    same, with the S3 two-slot quote ring (newest quote strictly before the print):
+      aggressor: eligible=4002448 ask=49.4% bid=49.5% quote=84.6% tick=14.3% late=1.1% nobook=0.1% unclassified(incl late)=1.2%
+
+S3 decision: the ring moved the quote-rule share by 0.1 point and the
+ask/bid split by 0.1 point — below the keep thresholds (≥2 / ≥1) — so it was
+removed; the cascade classifies against the book as of arrival. First-minute
+(09:30–09:31) lateness is ~10% of eligible prints vs 1.1% overall — the F2
+degradation is visible and D9 (MO-3) is the mitigation. By dollars, 84.8% of
+eligible dollars are quote/midpoint-ruled.
+
+Deferred (noted, not built): a general column-family mechanism in
+`bucket.ReadCSV` (the signed family is the only optional set today); the
+Python verifier loading condition tables from Go instead of hand copies
+(its docstring states it proves storage plumbing, not classification
+correctness).

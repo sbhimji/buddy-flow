@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"buddy-flow/internal/classify"
@@ -133,15 +134,15 @@ func TestWriteReadRoundTrip(t *testing.T) {
 		t.Fatalf("read %d rows, want 3", sess.Len())
 	}
 	for _, r := range s.Rows() {
-		if got := sess.Get(r.Symbol, r.Sec); got != r.Bucket {
+		if got := sess.Get(r.Symbol, r.Sec); !reflect.DeepEqual(got, r.Bucket) {
 			t.Errorf("(%s,%d): read %+v != stored %+v", r.Symbol, r.Sec, got, r.Bucket)
 		}
 	}
 	// F13: absent row reads as zero bucket, not an error.
-	if z := sess.Get("NVDA", 42); z != (Bucket{}) {
+	if z := sess.Get("NVDA", 42); !reflect.DeepEqual(z, Bucket{}) {
 		t.Errorf("absent row = %+v, want zero", z)
 	}
-	if z := sess.Get("TSLA", 100); z != (Bucket{}) {
+	if z := sess.Get("TSLA", 100); !reflect.DeepEqual(z, Bucket{}) {
 		t.Errorf("absent symbol = %+v, want zero", z)
 	}
 }
@@ -175,7 +176,7 @@ func TestReadGzip(t *testing.T) {
 		t.Fatalf("gz read %d rows, want 3", sess.Len())
 	}
 	for _, r := range s.Rows() {
-		if got := sess.Get(r.Symbol, r.Sec); got != r.Bucket {
+		if got := sess.Get(r.Symbol, r.Sec); !reflect.DeepEqual(got, r.Bucket) {
 			t.Errorf("(%s,%d): gz read %+v != stored %+v", r.Symbol, r.Sec, got, r.Bucket)
 		}
 	}

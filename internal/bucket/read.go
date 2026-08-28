@@ -18,9 +18,11 @@ import (
 type Session struct {
 	rows map[string]map[int64]Bucket
 
-	// HasSigned is false when the file predates MO-2 (no ask_*/bid_*/
-	// tick_rule/late columns): the signed fields of every Bucket are then
-	// "not recorded", never zero measurements — readers render a gap.
+	// HasSigned is false when the file carries no signed-volume family
+	// (written before MO-2, or from a source that is not time-ordered):
+	// every Bucket's Signed is then nil — "not recorded", never a zero
+	// measurement — and DeriveMinute propagates the nil. Readers render a
+	// gap.
 	HasSigned bool
 }
 
@@ -132,10 +134,13 @@ func ReadCSV(path string) (*Session, error) {
 		}
 		if s.HasSigned {
 			sget := func(i int) string { return fields[spos[i]] }
-			b.AskSide = ClassAgg{Trades: pInt(sget(0)), Shares: pF(sget(1)), Dollars: pF(sget(2))}
-			b.BidSide = ClassAgg{Trades: pInt(sget(3)), Shares: pF(sget(4)), Dollars: pF(sget(5))}
-			b.TickRule = pInt(sget(6))
-			b.Late = pInt(sget(7))
+			agg := func(i int) ClassAgg {
+				return ClassAgg{Trades: pInt(sget(i)), Shares: pF(sget(i + 1)), Dollars: pF(sget(i + 2))}
+			}
+			b.Signed = &SignedAgg{
+				AskSide: agg(0), BidSide: agg(3), QuoteAsk: agg(6), QuoteBid: agg(9),
+				TickRule: pInt(sget(12)), Late: pInt(sget(13)),
+			}
 		}
 		if perr != nil {
 			return nil, fmt.Errorf("%s:%d: %w", path, line, perr)
@@ -168,6 +173,9 @@ func (s *Session) DeriveMinute(symbol string, minuteSec int64) (Bucket, error) {
 		return Bucket{}, fmt.Errorf("minuteSec %d is not minute-aligned", minuteSec)
 	}
 	var out Bucket
+	if s.HasSigned {
+		out.Signed = &SignedAgg{}
+	}
 	m := s.rows[symbol]
 	for sec := minuteSec; sec < minuteSec+60; sec++ {
 		if b, ok := m[sec]; ok {

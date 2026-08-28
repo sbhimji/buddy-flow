@@ -163,8 +163,16 @@ func main() {
 	table := ingest.NewTable(syms)
 	p := ingest.NewPipeline(table, *queueSize)
 
+	// Signed volume (MO-2) is recorded only from a time-ordered source: a
+	// capture replays as one stream through the live decoder; flat files
+	// stream trades and quotes concurrently from ticker-sorted files, so the
+	// book at classification time would be scheduler-dependent — that store
+	// never classifies and its file carries no signed columns (B1).
 	var store *bucket.Store
-	if *bucketsPath != "" || *view {
+	switch {
+	case *capturePath != "" && (*bucketsPath != "" || *view):
+		store = bucket.NewTimeOrderedStore()
+	case *bucketsPath != "" || *view:
 		store = bucket.NewStore()
 	}
 	// The view wraps the store (delegates + tracks the replayed clock), so
@@ -307,11 +315,11 @@ func main() {
 				fmt.Fprintln(os.Stderr, nerr)
 				os.Exit(2)
 			}
-			writeBuckets(store, *bucketsPath) // reports the tripwire itself
-		} else {
-			reportTripwire(store) // -view-only runs still build a store; its tripwire must still be read
+			writeBuckets(store, *bucketsPath)
 		}
-		reportAggressor(store, p.CondOverflow.Load())
+		// -view-only runs still build a store; its tripwire must still be
+		// read, and the aggressor line is the session's honesty record.
+		bucket.Report(os.Stdout, store, p.CondOverflow.Load())
 		return
 	}
 
@@ -422,18 +430,7 @@ func main() {
 		os.Exit(3) // bad input file — distinct from exit 1 (lost messages) and 2 (flag misuse)
 	}
 	writeBuckets(store, *bucketsPath)
-	reportAggressor(store, p.CondOverflow.Load())
-}
-
-// reportAggressor prints the MO-2 honesty line (S5) next to the session
-// stats: the measured ask/bid/tick/late/unclassified split of eligible
-// prints. The tick share is the F2 data-quality number — reported, never
-// hidden. Nil-safe (runs without a store built no classification).
-func reportAggressor(store *bucket.Store, condOverflow int64) {
-	if store == nil {
-		return
-	}
-	fmt.Println(store.Aggressor().Line(condOverflow))
+	bucket.Report(os.Stdout, store, p.CondOverflow.Load())
 }
 
 // loadOptions binds the replayed day's options bucket file (7.4) and the
@@ -519,19 +516,6 @@ func renderViewAt(dv *devview.View, store *bucket.Store, hms string) {
 	fmt.Print(dv.Render(sec))
 }
 
-// reportTripwire prints the 0.3 unknown-condition tripwire. Consulted on
-// every path that builds a store: writeBuckets covers -buckets runs, and
-// the -view-only path calls it directly — a tripwire nobody reads is no
-// tripwire. Nil-safe.
-func reportTripwire(store *bucket.Store) {
-	if store == nil {
-		return
-	}
-	if n, ids := store.Unknown(); n > 0 {
-		fmt.Printf("!! tripwire: %d prints carried condition IDs missing from the 0.3 table: %v\n", n, ids)
-	}
-}
-
 // validateCaptureBucketName enforces the D3 coverage-naming contract on the
 // one path that produces partial files: a capture-derived store that does
 // not span the regular session (coverage through the 16:00 closing cross)
@@ -567,9 +551,10 @@ func validateCaptureBucketName(store *bucket.Store, path string) error {
 	return nil
 }
 
-// writeBuckets persists the 1.4 store and reports the unknown-condition
-// tripwire. No-op when -buckets was not given. Only called on clean runs —
-// a bucket file from a partial run would masquerade as a full session.
+// writeBuckets persists the 1.4 store. No-op when -buckets was not given.
+// Only called on clean runs — a bucket file from a partial run would
+// masquerade as a full session. The store summary (tripwire + aggressor
+// line) is printed by bucket.Report on every path that builds a store.
 func writeBuckets(store *bucket.Store, path string) {
 	if store == nil || path == "" {
 		return
@@ -580,7 +565,6 @@ func writeBuckets(store *bucket.Store, path string) {
 		os.Exit(1)
 	}
 	fmt.Printf("buckets: %d (second,symbol) rows -> %s\n", rows, path)
-	reportTripwire(store)
 }
 
 // reportState prints universe totals, (when top is set) the busiest

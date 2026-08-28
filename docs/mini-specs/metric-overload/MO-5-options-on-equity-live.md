@@ -1,6 +1,6 @@
 # MO-5 — Options columns on the equity screen, live (basket + ticker)
 
-Status: **open** (written 2026-08-26). Owner decision **O1** (README): options
+Status: **implemented on branch mo-5-options-live, awaiting review** (written 2026-08-26; implemented 2026-08-27). Owner decision **O1** (README): options
 z columns on the live equity trader table and in the per-ticker drill-down
 and strip, as measurement columns. Gated by MO-4 and `indiv-tickers` merged.
 Read first: MO-4, `7.7-conviction-view.md`, `ticker-view-v0.md` (`conv_z`/`net_z`
@@ -62,6 +62,39 @@ call). With them:
 3. Stamp-mismatch test: edited weights file → startup refuses the options
    columns with the file named; equity table still renders.
 4. Appendix C amendment committed in the same PR; footer scanner passes.
+
+## Close notes (2026-08-27, branch `mo-5-options-live`)
+
+- **Home:** new `internal/optequity` — one `Source` (basket `Baselines` +
+  `conviction.MinuteBuckets` reader + the per-ticker `tickerview.OptionsSource`)
+  built by `LoadReplay` (bucket file, cmd/replay) or `FromFollower`
+  (`optfollow.Follower`, cmd/live). `ExtendTrader` anchors on delta's
+  `class%` column and flowshare's gap-glyph footer line — a miss panics at
+  composition (MO-3 posture). The basket cell is `conviction.BasketMinute`
+  → `Baselines.Z` for the last completed minute (clamped at the close like
+  the drill-down), memoized per basket per render second.
+- **Refusal posture (L2), both commands:** any options load failure —
+  stamp mismatch names the file — prints `options columns REFUSED (equity
+  table … without conv_z/net_z): <err>` to stderr and the table composes
+  without the pair; cmd/replay no longer exits 1 on it (the shared posture
+  is what lets the stamp test run on replay).
+- **cmd/live lag note:** the follower's clock is RecvNs-based (MO-4) — a
+  basket cell here can lag the :8788 table by one poll (250 ms tail poll);
+  the equity clock is the SIP timestamp. Both describe the same completed
+  minute; only the moment the gap fills differs.
+- **Launchd:** `com.buddyflow.live.plist` passes
+  `-options-capture data/capture-options/$(date +%F)/stream.jsonl
+  -options-profiles data/profiles-options` (date resolved by the shell in
+  ET at launch). `bin/live` is a compiled binary (gitignored), not a shell
+  wrapper — nothing to edit there; rebuild it.
+- Done-when 2 (live dry-run) was not run under the no-network rule:
+  cmd/live opens the websocket before anything else; the follower path is
+  exercised by the unit tests (`TestFollowerBackedSourceGapsUntilTapeAdvances`)
+  and the flag validation ran without network. First live morning is the check.
+- Done-when 1's 10:29 digits are reproducible only against the frozen
+  profile rows in `internal/optfollow/testdata` (profiles have rolled);
+  the equity column is asserted equal to `BasketMinute`→`Z` in a unit test
+  and against a Python recomputation at 09:44 on the fixture.
 
 ## Decisions consumed
 

@@ -34,6 +34,8 @@ import (
 	"buddy-flow/internal/feed"
 	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
+	"buddy-flow/internal/optequity"
+	"buddy-flow/internal/optfollow"
 	"buddy-flow/internal/premarket"
 	"buddy-flow/internal/tickerview"
 	"buddy-flow/internal/universe"
@@ -51,9 +53,18 @@ func main() {
 		resume      = flag.Bool("resume", false, "append to an existing capture for today (deliberate mid-session restart ONLY — never run two instances at once)")
 		drillPath   = flag.String("drill", "", "with -view: rewrite this file (atomically, every -drill-every of event time) with every basket's ticker drill-down (ticker-view-v0) — tools/live_view_server.py --drill serves it as ?basket=NAME; empty = off")
 		drillEvery  = flag.Duration("drill-every", 5*time.Second, "event-time cadence of the -drill rewrite")
+		optCapture  = flag.String("options-capture", "", "with -view: the day's options capture (7.1, data/capture-options/<date>/stream.jsonl) to follow read-only (MO-5) — adds basket conv_z/net_z to the trader table and per-ticker conv_z/net_z to the drill-down and strip; waits for the file if it does not exist yet; empty = no options columns")
+		optProfiles = flag.String("options-profiles", "", "with -options-capture: options profile dir (7.6); a weights-stamp mismatch refuses the options columns loudly and the equity table starts without them")
+		optWeights  = flag.String("options-weights", "docs/foundations/options-weights-v1.json", "conviction weights config (7.3) — the stamp the options profiles must carry")
 		preLogPath  = flag.String("pre-log", "data/live-pre.log", "with -view: write the premarket frame (MO-7: pre_vol/pre_share/pre_conc ranked by pre_share, frozen at 09:30) here on every tick, a full-screen redraw per frame like live.log — tools/live_view_server.py --pre-log serves it as the PREMARKET tab; empty = off")
 	)
 	flag.Parse()
+	if (*optCapture == "") != (*optProfiles == "") {
+		fatal(fmt.Errorf("-options-capture and -options-profiles go together"))
+	}
+	if *optCapture != "" && !*view {
+		fatal(fmt.Errorf("-options-capture requires -view"))
+	}
 
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
@@ -109,6 +120,7 @@ func main() {
 	var dv *devview.View
 	var drill *tickerview.DrillWriter
 	var pre *preLog
+	var follower *optfollow.Follower // MO-5: read-only options follower, stopped with the view
 	if *view {
 		bks, err := universe.LoadBaskets(*basketsPath)
 		if err != nil {
@@ -143,11 +155,44 @@ func main() {
 		// MO-3: delta / class% after concentration_day (README order),
 		// read from the signed columns the time-ordered store classifies.
 		cols, footer = delta.New(store).ExtendTrader(cols, footer)
+		// MO-5: the options tape on the equity screen, live. A separate
+		// read-only follower over the day's options capture (MO-4; the
+		// options capture process is never touched — L4); basket
+		// conv_z/net_z after class%, per-ticker conv_z/net_z through the
+		// same follower. Startup before the tape is the normal case (L3):
+		// the follower waits for the file and the columns gap until the
+		// tape has been read past a minute's end. A stamp mismatch — or
+		// any load failure — refuses the options columns LOUDLY and the
+		// equity table starts without them (L2): never a blended number.
+		// Note: the follower's clock is RecvNs-based, so a basket cell here
+		// may lag the :8788 table by one poll.
+		var opts *tickerview.OptionsSource
+		if *optCapture != "" {
+			f, err := optfollow.Start(optfollow.Config{
+				CapturePath: *optCapture, WeightsPath: *optWeights, BasketsCfg: *basketsPath, ProfilesDir: *optProfiles,
+				Waiting: func(path string) {
+					fmt.Fprintf(logw, "options: waiting for %s to appear (conv_z/net_z gap until then)\n", path)
+				},
+				Opened: func() { fmt.Fprintf(logw, "options: following %s\n", *optCapture) },
+			})
+			if err == nil {
+				var src *optequity.Source
+				if src, err = optequity.FromFollower(f, *optProfiles, syms); err != nil {
+					f.Stop()
+				} else {
+					follower = f
+					cols, footer = src.ExtendTrader(cols, footer)
+					opts = src.Ticker
+				}
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "options columns REFUSED (equity table starts without conv_z/net_z): %v\n", err)
+			}
+		}
 		// Ticker view (ticker-view-v0): the crossings strip rides on every
 		// frame; every basket's drill-down goes to the -drill file for the
-		// frame server. No options tape here — conv_z/net_z are not
-		// rendered live in v0 (the options capture is a separate process).
-		tv, err := tickerview.New(store, table, bks, dv.Profiles(), floors, nil)
+		// frame server.
+		tv, err := tickerview.New(store, table, bks, dv.Profiles(), floors, opts)
 		if err != nil {
 			fatal(err)
 		}
@@ -244,6 +289,13 @@ func main() {
 	p.Close()
 	<-pipeDone
 	stopRender() // final table into scrollback; summary lines follow on stdout
+	if follower != nil {
+		// L4: the follower stops with the view; the options capture
+		// process is never touched. Stop waits for its pipeline to drain.
+		follower.Stop()
+		frames, prints, dupes, decodeErrs := follower.Progress()
+		fmt.Fprintf(logw, "options follower: frames=%d prints=%d dupes=%d decode-errs=%d\n", frames, prints, dupes, decodeErrs)
+	}
 
 	reason := "session end"
 	select {

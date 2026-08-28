@@ -285,22 +285,29 @@ func (c *Calc) Column(styled bool) devview.Column {
 		return fmt.Sprintf("%d/%d", up, len(rc.Basket.States))
 	}}
 	if styled {
-		col.Style = func(rc *devview.RowCtx) string {
-			up, _, down, ok := c.count(rc.Basket.States, rc.AtSec)
-			if !ok {
-				return ""
-			}
-			n := float64(len(rc.Basket.States))
-			switch {
-			case float64(up)/n > HighlightFrac:
-				return sgrGreen
-			case float64(down)/n > HighlightFrac:
-				return sgrRed
-			}
-			return ""
-		}
+		col.Style = c.Style
 	}
 	return col
+}
+
+// Style is the T7 HighlightFrac rule as a devview.Column.Style: bold green
+// when MORE than HighlightFrac of full membership is persistently ↑, bold
+// red when more than HighlightFrac is persistently ↓, else none (gap rows
+// included). Shared by the 3.2 cell and the MO-1 merged cell so the
+// highlight has one owner.
+func (c *Calc) Style(rc *devview.RowCtx) string {
+	up, _, down, ok := c.count(rc.Basket.States, rc.AtSec)
+	if !ok {
+		return ""
+	}
+	n := float64(len(rc.Basket.States))
+	switch {
+	case float64(up)/n > HighlightFrac:
+		return sgrGreen
+	case float64(down)/n > HighlightFrac:
+		return sgrRed
+	}
+	return ""
 }
 
 // DetailColumn is the three-state detail (dev view only — the dev plan's

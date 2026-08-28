@@ -132,13 +132,7 @@ func (c *Calc) Columns() []devview.Column {
 			}
 			return fmtUSD(bd)
 		}},
-		{Name: "pre_share", Width: 9, Cell: func(rc *devview.RowCtx) string {
-			s, ok := c.share(rc)
-			if !ok {
-				return gap
-			}
-			return fmt.Sprintf("%.1f%%", 100*s)
-		}},
+		c.preShareColumn(),
 		{Name: "pre_conc", Width: 12, Cell: func(rc *devview.RowCtx) string {
 			if !c.memo(rc.AtSec) {
 				return gap
@@ -164,18 +158,23 @@ func (c *Calc) Columns() []devview.Column {
 // table after MO-1 (docs/mini-specs/metric-overload/MO-1-column-prune.md):
 // pre_share, the pre-open rank key and the single post-open context
 // column. pre_vol and pre_conc return on the premarket tab (MO-7).
-func (c *Calc) SessionColumn() devview.Column {
-	for _, col := range c.Columns() {
-		if col.Name == "pre_share" {
-			return col
+func (c *Calc) SessionColumn() devview.Column { return c.preShareColumn() }
+
+// preShareColumn is the basket's share of universe premarket dollars; gap
+// on a 0/0. One constructor serves both the full set and the session table.
+func (c *Calc) preShareColumn() devview.Column {
+	return devview.Column{Name: "pre_share", Width: 9, Cell: func(rc *devview.RowCtx) string {
+		s, ok := c.share(rc)
+		if !ok {
+			return gap
 		}
-	}
-	panic("premarket: pre_share column missing from Columns")
+		return fmt.Sprintf("%.1f%%", 100*s)
+	}}
 }
 
 // PreFooter is the plain-English legend block appended to the trader
 // footer. Statements of measurement only (scope law).
-const PreFooter = `pre_share         = % of all dollars traded 04:00-09:30 ET across the tracked universe (extended-hours prints; a separate lens — no regular-session number includes them) that went through this basket
+const PreFooter = `pre_share         = this basket's % of all dollars traded 04:00–09:30 ET across the tracked universe (extended-hours prints — a separate lens; no regular-session number includes them)
 premarket caveat  = raw magnitudes only — no 20-day "typical" exists premarket; volumes are thin, lumpy, and heavily off-exchange. Until the open completes its first minute, rows sort by pre_share.
 `
 

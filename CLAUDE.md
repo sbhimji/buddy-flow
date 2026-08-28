@@ -82,8 +82,8 @@ deterministic replay of captured sessions is what makes all other work possible.
 live run — recorded sessions are the test corpus, and the §6 reference days (SNDK guide-night
 open, VIAV→optics morning, a known de-grossing day) can only be recorded when they occur.
 
-Build the crude developer view (story 3.0) before any math. Every metric becomes visible the
-day it is written; that is how intuition for the numbers gets acquired.
+The crude developer view (story 3.0) was built before any math and stays the dev mode; every
+metric becomes visible the day it is written — that is how intuition for the numbers gets acquired.
 
 ## Decisions belong to the trader
 
@@ -103,4 +103,4 @@ because ETF arbitrage moves members mechanically (F18).
 ## Timeline
 
 4–6 weeks solo to the §6 acceptance bar, assuming partial reuse of APEX ingestion plumbing.
-The spec's 2-week figure reaches a demo, not acceptance (F10). Phases 0–1 are the schedule risk.
+The spec's 2-week figure reaches a demo, not acceptance (F10). Phases 0–1 (the schedule risk) are done; the risk now sits in the §6 reference days, which can only be recorded when they occur.

@@ -273,9 +273,13 @@ func TestTraderColumns(t *testing.T) {
 	if len(cols) != len(wantOrder) {
 		t.Fatalf("%d columns, want %d", len(cols), len(wantOrder))
 	}
-	for _, dropped := range []string{"relative_vol", "up_on_vol", "concentration ", "pre_vol", "pre_conc"} {
-		if strings.Contains(footer, dropped) {
-			t.Errorf("footer still defines pruned column %q", dropped)
+	// Pruned keys must not head any footer line (pre_vol/pre_conc never
+	// lived here — premarket_test.go guards PreFooter).
+	for _, line := range strings.Split(footer, "\n") {
+		for _, dropped := range []string{"relative_vol", "up_on_vol", "concentration "} {
+			if strings.HasPrefix(line, dropped) {
+				t.Errorf("footer still defines pruned column %q", dropped)
+			}
 		}
 	}
 	for i, w := range wantOrder {

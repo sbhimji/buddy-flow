@@ -54,10 +54,9 @@ absent): `cum_share · cum_share_typ · cum_share_z · breadth · concentration_
   `pre_share`. The scanner test still guards both.
 - **P3 — Dev view untouched** except the registry losing nothing: dev mode
   still registers every column, including the ones the trader set dropped.
-- **P4 — Snapshot discipline.** Trader snapshot fixtures are regenerated once
-  in this PR and reviewed by eye against the pre-change frame at the same
-  `-view-at` minute: every surviving cell byte-identical, only columns removed
-  or merged.
+- **P4 — Snapshot discipline.** The 09:45 fixture frame is diffed against the
+  baseline: only owned columns differ — every surviving cell byte-identical,
+  only columns removed or merged.
 
 ## Done when (replayed data)
 

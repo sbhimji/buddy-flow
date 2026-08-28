@@ -1,6 +1,6 @@
 # MO-8 — Run metrics: `since`, `5m_z`, `vs_SPY`
 
-Status: **implemented on branch mo-8-run-metrics, awaiting review** (written 2026-08-26; implemented 2026-08-27). The "is there a run to chase" story
+Status: **reviewed and merged to metric-overload from mo-8-run-metrics (2026-08-28)** (written 2026-08-26; implemented 2026-08-27). The "is there a run to chase" story
 (README question → metric map). Owner decision O2: after signed volume and
 the prune. Gated by MO-1 (column order). Read first: `3.1-flowshare.md`
 (D5 per-minute `flow_share_z` — the atom; D7 cum family), `3.2-breadth.md`

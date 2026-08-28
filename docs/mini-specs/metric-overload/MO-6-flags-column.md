@@ -1,6 +1,6 @@
 # MO-6 — `flags` column: coincidence glyphs, no composite
 
-Status: **implemented on branch mo-6-flags-column, awaiting review** (2026-08-28;
+Status: **reviewed and merged to metric-overload from mo-6-flags-column (2026-08-28)** (2026-08-28;
 written 2026-08-26; close notes below). Owner decision **O3** (README).
 Gated by MO-3 and MO-5 for the `δ` and `C` glyphs (a glyph whose metric is
 absent stays unlit; the column can ship earlier with fewer glyphs). Read

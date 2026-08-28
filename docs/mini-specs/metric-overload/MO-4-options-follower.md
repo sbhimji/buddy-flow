@@ -1,6 +1,6 @@
 # MO-4 — Shared read-only options follower + read locking
 
-Status: **implemented on branch mo-4-options-follower, awaiting review** (written 2026-08-26). Prerequisite for MO-5. Not gated by
+Status: **reviewed and merged to metric-overload from mo-4-options-follower (2026-08-28)** (written 2026-08-26). Prerequisite for MO-5. Not gated by
 the equity stories (disjoint code) — can run in parallel with MO-2/MO-3.
 Read first: `7.7-conviction-view.md` (follow mode, runbook), `7.4-options-buckets.md`,
 backlog "Trader view as a separate process — follow-mode replay", backlog

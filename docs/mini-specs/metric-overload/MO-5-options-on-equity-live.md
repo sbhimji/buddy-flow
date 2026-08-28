@@ -1,6 +1,6 @@
 # MO-5 — Options columns on the equity screen, live (basket + ticker)
 
-Status: **implemented on branch mo-5-options-live, awaiting review** (written 2026-08-26; implemented 2026-08-27). Owner decision **O1** (README): options
+Status: **reviewed and merged to metric-overload from mo-5-options-live (2026-08-28)** (written 2026-08-26; implemented 2026-08-27). Owner decision **O1** (README): options
 z columns on the live equity trader table and in the per-ticker drill-down
 and strip, as measurement columns. Gated by MO-4 and `indiv-tickers` merged.
 Read first: MO-4, `7.7-conviction-view.md`, `ticker-view-v0.md` (`conv_z`/`net_z`

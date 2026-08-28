@@ -1,6 +1,6 @@
 # MO-1 — Trader column set v1 (prune, merge, rename)
 
-Status: **implemented on branch mo-1-column-prune, awaiting review** (written 2026-08-26;
+Status: **reviewed and merged to metric-overload from mo-1-column-prune (2026-08-28)** (written 2026-08-26;
 implemented 2026-08-27). Folder: `metric-overload/README.md`
 (owner decision O2: first story). Gated by: `indiv-tickers` merged (it touches
 `internal/devview`, `internal/profile`, both commands, and adds

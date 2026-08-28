@@ -1,6 +1,6 @@
 # MO-3 — `delta` and `class%` on basket rows and the drill-down (3.3, part 2)
 
-Status: **implemented on branch mo-3-delta-view, awaiting review** (2026-08-27;
+Status: **reviewed and merged to metric-overload from mo-3-delta-view (2026-08-28)** (2026-08-27;
 written 2026-08-26; review amendments (a)–(f) folded in before implementation;
 trader-review batch of 2026-08-27 — 5-minute window, 0.20, thin-basket and
 per-ticker highlight floors, 09:33 first cell — applied the same day).

@@ -65,6 +65,25 @@ to the session tab only; on the premarket tab it is ignored.
    shows both tabs; the frame server serves both.
 4. Footer scanner passes on the premarket footer (already guarded).
 
+## Close notes (2026-08-27, review applied)
+
+- `pre_conc` renders the top member's dollars too (`MU $1.2B 54%`) so a
+  100% of $3M and a 54% of $2.7B read differently. Column width 18.
+- Pre-frame clock line carries a status: `premarket window 04:00–HH:MM:SS,
+  live` before the open, `premarket window 04:00–09:30 frozen` at/after it.
+- `pre_vol` footer says `$0 = no prints captured in the window`: the frame
+  cannot yet tell a quiet basket from a capture that started late.
+  **Follow-up:** capture-start awareness (gap, not `$0`, for the part of the
+  window before the first captured frame).
+- Tab persistence: an explicit click is stored as `{tab, side, date}` and
+  honored on load only on the same side of 09:30 on the same ET day; a 30 s
+  timer re-applies the clock default once when the side flips at 09:30.
+- One `premarket.Calc` per process serves both the session table's
+  `pre_share` and the premarket frame (one union window pass per second).
+- Done-when #3 (live dry-run) was not run under the no-network rule; the
+  `-pre-log` writer is exercised only by build/vet — first live morning is
+  the check.
+
 ## Decisions consumed
 
 O4; premarket-view-v0 (slice, window, no-z, footer honesty, rank fallback);

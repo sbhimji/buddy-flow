@@ -13,6 +13,7 @@ package premarket
 
 import (
 	"fmt"
+	"time"
 
 	"buddy-flow/internal/bucket"
 	"buddy-flow/internal/devview"
@@ -133,7 +134,7 @@ func (c *Calc) Columns() []devview.Column {
 			return fmtUSD(bd)
 		}},
 		c.preShareColumn(),
-		{Name: "pre_conc", Width: 12, Cell: func(rc *devview.RowCtx) string {
+		{Name: "pre_conc", Width: 18, Cell: func(rc *devview.RowCtx) string {
 			if !c.memo(rc.AtSec) {
 				return gap
 			}
@@ -147,9 +148,12 @@ func (c *Calc) Columns() []devview.Column {
 				}
 			}
 			if total == 0 {
-				return gap // "X 0%" would be a fake statement
+				return gap // "X $0 0%" would be a fake statement
 			}
-			return fmt.Sprintf("%s %.0f%%", sym, 100*top/total)
+			// Top member, its dollars, its slice: "MU $1.2B 61%" — the
+			// dollars keep "EQIX 100%" of $3M distinguishable from
+			// "MU 61%" of $2B.
+			return fmt.Sprintf("%s %s %.0f%%", sym, fmtUSD(top), 100*top/total)
 		}},
 	}
 }
@@ -181,9 +185,9 @@ premarket caveat  = raw magnitudes only — no 20-day "typical" exists premarket
 // TabFooter is the premarket tab's legend (MO-7): the full three-column
 // form, statements of measurement only. The session table keeps the
 // shorter PreFooter (pre_share alone, MO-1).
-const TabFooter = `pre_vol           = dollars traded in this basket 04:00–09:30 ET (extended-hours prints — a separate lens; no regular-session number includes them); $0 is a measured zero
+const TabFooter = `pre_vol           = dollars traded in this basket 04:00–09:30 ET (extended-hours prints — a separate lens; no regular-session number includes them); $0 = no prints captured in the window
 pre_share         = this basket's % of all dollars traded 04:00–09:30 ET across the tracked universe; rows sort by it
-pre_conc          = the basket member with the most premarket dollars and its % of the basket's premarket dollars
+pre_conc          = the basket member with the most premarket dollars, those dollars, and their % of the basket's premarket dollars
 premarket caveat  = raw dollars; no typical yet — no 20-day "typical" exists premarket, so there is no z; volumes are thin, lumpy, and heavily off-exchange. Live until 09:30, then frozen as the day's context.
 `
 
@@ -194,6 +198,30 @@ premarket caveat  = raw dollars; no typical yet — no 20-day "typical" exists p
 // kept on screen as context all day).
 func (c *Calc) Tab() ([]devview.Column, func(*devview.RowCtx) (float64, bool), string) {
 	return c.Columns(), c.share, TabFooter
+}
+
+// Frozen reports whether the premarket window has closed at atSec (at or
+// after 09:30 ET on its date): every premarket cell then reads the full
+// window and no longer moves. False before the open or off a resolvable
+// date.
+func Frozen(atSec int64) bool {
+	open, err := session.BucketStart(session.Date(atSec*1e9), session.OpenMinute)
+	if err != nil {
+		return false
+	}
+	return atSec >= open
+}
+
+// Status is the premarket frame's clock-line status (MO-7): the window
+// the cells read and whether it is still moving. Pure in atSec.
+func (c *Calc) Status(atSec int64) string {
+	if Frozen(atSec) {
+		return "premarket window 04:00–09:30 frozen"
+	}
+	if _, _, ok := c.window(atSec); !ok {
+		return "premarket window 04:00–09:30 not yet open"
+	}
+	return "premarket window 04:00–" + time.Unix(atSec, 0).In(session.ET()).Format("15:04:05") + ", live"
 }
 
 // ExtendTrader appends pre_share to the trader-view set, adds the footer

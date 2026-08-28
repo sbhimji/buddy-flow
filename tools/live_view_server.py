@@ -71,24 +71,34 @@ const basket = new URLSearchParams(location.search).get('basket') || '';
 // Default tab by the ET wall clock in the browser (MO-7 T2): before 09:30
 // -> premarket, otherwise session. No server clock, no DST hand-rolling.
 // Mirrors default_tab() in the Python (unit-tested there).
-function etHM() {
-  const parts = new Intl.DateTimeFormat('en-US', {timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit'}).formatToParts(new Date());
-  const get = t => parseInt(parts.find(p => p.type === t).value, 10) % 24;
-  return [get('hour'), get('minute')];
+function etParts() {
+  const parts = new Intl.DateTimeFormat('en-US', {timeZone: 'America/New_York', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'}).formatToParts(new Date());
+  const get = t => parts.find(p => p.type === t).value;
+  return {h: parseInt(get('hour'), 10) % 24, m: parseInt(get('minute'), 10), date: get('year') + '-' + get('month') + '-' + get('day')};
 }
-function defaultTab() { const [h, m] = etHM(); return (h < 9 || (h === 9 && m < 30)) ? 'pre' : 'session'; }
-let tab = defaultTab();
-try { tab = sessionStorage.getItem('tab') || tab; } catch (e) {}
-function setTab(t) {
+function defaultTab() { const {h, m} = etParts(); return (h < 9 || (h === 9 && m < 30)) ? 'pre' : 'session'; }
+// A click is honored only on the same side of 09:30 on the same ET day;
+// otherwise the clock default wins. Pure; mirrors choose_tab() in the Python.
+function chooseTab(stored, side, today) {
+  if (stored && (stored.tab === 'pre' || stored.tab === 'session') && stored.side === side && stored.date === today) return stored.tab;
+  return side;
+}
+function readStored() { try { return JSON.parse(sessionStorage.getItem('tab') || 'null'); } catch (e) { return null; } }
+let side = defaultTab();
+let tab = chooseTab(readStored(), side, etParts().date);
+function setTab(t, clicked) {
   tab = t;
-  try { sessionStorage.setItem('tab', t); } catch (e) {}
+  if (clicked) { try { sessionStorage.setItem('tab', JSON.stringify({tab: t, side: side, date: etParts().date})); } catch (e) {} }
   document.getElementById('tab-pre').className = t === 'pre' ? 'on' : '';
   document.getElementById('tab-session').className = t === 'session' ? 'on' : '';
   document.getElementById('nav').style.display = t === 'session' ? '' : 'none';
   tick();
 }
-document.getElementById('tab-pre').onclick = () => setTab('pre');
-document.getElementById('tab-session').onclick = () => setTab('session');
+document.getElementById('tab-pre').onclick = () => setTab('pre', true);
+document.getElementById('tab-session').onclick = () => setTab('session', true);
+// When the clock crosses 09:30 the default flips once to SESSION (no
+// reload needed); a later click still wins until the next flip.
+setInterval(() => { const s = defaultTab(); if (s !== side) { side = s; setTab(s, false); } }, 30000);
 async function tick() {
   const want = tab;
   try {
@@ -111,7 +121,7 @@ async function tick() {
     document.getElementById('age').className = 'stale';
   }
 }
-setTab(tab); setInterval(tick, 1000);
+setTab(tab, false); setInterval(tick, 1000);
 </script></body></html>
 """
 
@@ -126,6 +136,22 @@ def default_tab(hour, minute):
     return "pre" if (hour, minute) < OPEN_HM else "session"
 
 
+def choose_tab(stored, side, today):
+    """The tab to show on load. `stored` is the trader's last explicit
+    click as {"tab", "side", "date"} (or None); `side` is default_tab() now;
+    `today` is the ET date. The click is honored only while it was made on
+    the same side of 09:30 on the same day — once the clock flips (or the
+    day changes) the clock default wins again. Mirrors chooseTab() in the
+    page's JS."""
+    if (stored and stored.get("tab") in TABS
+            and stored.get("side") == side and stored.get("date") == today):
+        return stored["tab"]
+    return side
+
+
+TABS = ("session", "pre")
+
+
 def last_frame(path):
     """Return (frame_bytes, age_seconds) for the newest complete frame."""
     size = os.path.getsize(path)
@@ -134,9 +160,12 @@ def last_frame(path):
         chunk = f.read()
     age = time.time() - os.path.getmtime(path)
     frames = chunk.split(FRAME_DELIM)
-    # frames[0] is a partial head (or pre-frame output); prefer the last
-    # delimited frame, falling back one if the newest looks torn mid-write.
-    if len(frames) >= 3 and not frames[-1].endswith(b"\n"):
+    # frames[0] is a partial head (or pre-frame output). Serve the newest
+    # delimited frame only when it is complete (ends with a newline); a
+    # torn one falls back to the previous frame when there is one.
+    if len(frames) >= 2 and frames[-1].endswith(b"\n"):
+        return frames[-1], age
+    if len(frames) >= 3:
         return frames[-2], age
     if len(frames) >= 2:
         return frames[-1], age
@@ -269,9 +298,6 @@ def splice_drill(frame, selected, drill_path):
     if not hit and not want_all:
         out.append(b"(no basket named %s in the table)" % ",".join(selected).encode())
     return b"\n".join(out)
-
-
-TABS = ("session", "pre")
 
 
 def make_handler(log_path, drill_path, pre_log_path=""):

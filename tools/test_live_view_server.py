@@ -39,6 +39,58 @@ class DefaultTabTest(unittest.TestCase):
         self.assertEqual(lvs.default_tab(23, 59), "session")
 
 
+class ChooseTabTest(unittest.TestCase):
+    """choose_tab honors an explicit click only on the same side of 09:30
+    on the same ET day (MO-7 review #1)."""
+
+    def test_no_click(self):
+        self.assertEqual(lvs.choose_tab(None, "pre", "2026-08-24"), "pre")
+        self.assertEqual(lvs.choose_tab(None, "session", "2026-08-24"), "session")
+
+    def test_click_same_side_same_day(self):
+        stored = {"tab": "session", "side": "pre", "date": "2026-08-24"}
+        self.assertEqual(lvs.choose_tab(stored, "pre", "2026-08-24"), "session")
+
+    def test_click_invalidated_by_flip(self):
+        stored = {"tab": "pre", "side": "pre", "date": "2026-08-24"}
+        self.assertEqual(lvs.choose_tab(stored, "session", "2026-08-24"), "session")
+
+    def test_click_invalidated_by_day(self):
+        stored = {"tab": "session", "side": "pre", "date": "2026-08-24"}
+        self.assertEqual(lvs.choose_tab(stored, "pre", "2026-08-25"), "pre")
+
+    def test_garbage(self):
+        self.assertEqual(lvs.choose_tab({"tab": "nope", "side": "pre", "date": "2026-08-24"}, "pre", "2026-08-24"), "pre")
+        self.assertEqual(lvs.choose_tab({}, "session", "2026-08-24"), "session")
+
+
+class LastFrameTest(unittest.TestCase):
+    """last_frame serves the newest frame only when complete (review #6)."""
+
+    def write(self, data):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "log")
+        with open(p, "wb") as f:
+            f.write(data)
+        return p
+
+    def test_complete_newest(self):
+        p = self.write(FRAME + b"one\n" + FRAME + b"two\n")
+        self.assertEqual(lvs.last_frame(p)[0], b"two\n")
+
+    def test_torn_newest_falls_back(self):
+        p = self.write(FRAME + b"one\n" + FRAME + b"tw")
+        self.assertEqual(lvs.last_frame(p)[0], b"one\n")
+
+    def test_torn_only_frame(self):
+        p = self.write(FRAME + b"on")
+        self.assertEqual(lvs.last_frame(p)[0], b"on")
+
+    def test_no_delimiter(self):
+        p = self.write(b"raw")
+        self.assertEqual(lvs.last_frame(p)[0], b"raw")
+
+
 class FrameServerTest(unittest.TestCase):
     """/frame?tab=session|pre serve their respective logs, staleness per tab,
     ?basket= applies to the session tab only."""
@@ -124,6 +176,7 @@ class FrameServerTest(unittest.TestCase):
         self.assertIn("PREMARKET", body)
         self.assertIn("SESSION", body)
         self.assertIn("America/New_York", body)
+        self.assertIn("chooseTab", body)
 
 
 if __name__ == "__main__":

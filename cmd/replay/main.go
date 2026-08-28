@@ -216,22 +216,26 @@ func main() {
 		// MO-3: delta / class% from the signed columns MO-2 stores; one
 		// Calc serves whichever column set is composed.
 		dc := delta.New(store)
+		// One premarket Calc per process (its memo serves whichever
+		// frame is composed).
+		pc := premarket.New(store, unionStates)
 		switch *viewMode {
 		case "premarket":
 			// MO-7 (T4 replay parity): the premarket tab's frame — the
 			// same premarket.Tab composition cmd/live renders to its
 			// -pre-log — so -view-at 08:00:00 checks and snapshots
 			// exercise the live code path.
-			cols, rank, footer := premarket.New(store, unionStates).Tab()
+			cols, rank, footer := pc.Tab()
 			dv.SetColumns(cols)
 			dv.SetRank(rank)
 			dv.SetFooter(footer)
+			dv.SetStatus(pc.Status)
 		case "trader":
 			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, vc.BreadthColumn(true))
 			// Premarket columns + pre-open rank (premarket-view-v0) —
 			// same composition as cmd/live so replays reproduce the
 			// trader's screen.
-			cols, rank, footer = premarket.New(store, unionStates).ExtendTrader(cols, rank, footer)
+			cols, rank, footer = pc.ExtendTrader(cols, rank, footer)
 			// After concentration_day (README order); gaps on a store
 			// that recorded no classification.
 			cols, footer = dc.ExtendTrader(cols, footer)

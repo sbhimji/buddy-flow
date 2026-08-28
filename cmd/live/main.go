@@ -136,7 +136,10 @@ func main() {
 		// Premarket columns + pre-open rank (premarket-view-v0): where
 		// extended-hours dollars concentrate before the bell; frozen at
 		// 09:30 as context for the day.
-		cols, rank, footer = premarket.New(store, unionStates).ExtendTrader(cols, rank, footer)
+		// One Calc per process: the premarket frame (below) shares it,
+		// so the union window pass runs once per second, not twice.
+		pc := premarket.New(store, unionStates)
+		cols, rank, footer = pc.ExtendTrader(cols, rank, footer)
 		// MO-3: delta / class% after concentration_day (README order),
 		// read from the signed columns the time-ordered store classifies.
 		cols, footer = delta.New(store).ExtendTrader(cols, footer)
@@ -167,10 +170,11 @@ func main() {
 			if err != nil {
 				fatal(err)
 			}
-			pcols, prank, pfooter := premarket.New(store, unionStates).Tab()
+			pcols, prank, pfooter := pc.Tab()
 			pv.SetColumns(pcols)
 			pv.SetRank(prank)
 			pv.SetFooter(pfooter)
+			pv.SetStatus(pc.Status)
 			f, err := os.Create(*preLogPath) // truncated at start, like live.log (8.1)
 			if err != nil {
 				fatal(fmt.Errorf("-pre-log: %w", err))

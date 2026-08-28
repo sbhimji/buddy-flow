@@ -101,10 +101,10 @@ func TestRowsAndDetail(t *testing.T) {
 
 	got := c.Detail("one", at)
 	want := "" +
-		"    TICKER      last    open%     cum_$  cum_$_typ  cum_$_z    rvol     $_z  of_basket  since\n" +
-		"    A          12.00  +20.00%     1.60k      1.00k  \x1b[1;32m   +3.0\x1b[0m    0.50   +50.0        57%  09:30\n" +
-		"    C          10.00        ·     1.00k      1.00k     +0.0    1.00   +90.0        36%       \n" +
-		"    B          10.00        ·       200      1.00k  \x1b[1;31m   -4.0\x1b[0m    0.20   +10.0         7%  09:30\n"
+		"    TICKER      last    open%     cum_$  cum_$_typ  cum_$_z  rvol_sh     $_z  of_basket  since\n" +
+		"    A          12.00  +20.00%     1.60k      1.00k  \x1b[1;32m   +3.0\x1b[0m     0.50   +50.0        57%  09:30\n" +
+		"    C          10.00        ·     1.00k      1.00k     +0.0     1.00   +90.0        36%       \n" +
+		"    B          10.00        ·       200      1.00k  \x1b[1;31m   -4.0\x1b[0m     0.20   +10.0         7%  09:30\n"
 	if got != want {
 		t.Errorf("detail:\n%s\nwant:\n%s", got, want)
 	}
@@ -216,10 +216,14 @@ func TestFooterScopeLaw(t *testing.T) {
 			t.Errorf("footer contains %q", banned)
 		}
 	}
-	for _, col := range []string{"last ", "open% ", "cum_$ ", "cum_$_typ ", "cum_$_z ", "rvol ", "$_z ", "of_basket ", "conv_z", "since ", "crossed"} {
+	for _, col := range []string{"last ", "open% ", "cum_$ ", "cum_$_typ ", "cum_$_z ", "rvol_sh ", "$_z ", "of_basket ", "conv_z", "since ", "crossed"} {
 		if !strings.Contains(Footer, col) {
 			t.Errorf("footer does not define %q", col)
 		}
+	}
+	// MO-1: the shares ratio is named for what it is; the old name is gone.
+	if strings.Contains(Footer, "rvol ") {
+		t.Error("footer still defines rvol (renamed rvol_sh)")
 	}
 }
 

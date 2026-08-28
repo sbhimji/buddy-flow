@@ -168,6 +168,82 @@ func TestVolumeSPYMissing(t *testing.T) {
 	}
 }
 
+// TestBreadthMerged: the MO-1 trader cell `x/y z$` — 3.2 breadth over full
+// membership, then the ↑ members also on unusual volume — with the VB4
+// gap rules preserved: price-side gap → whole cell gaps; volume side
+// unmeasurable alone → `x/y ·$`.
+func TestBreadthMerged(t *testing.T) {
+	vc, table, open := volSynth(t)
+	at := open + 4*60 + 5 // 09:34:05
+	col := vc.BreadthColumn(true)
+	if col.Name != "breadth" || col.Width != 9 || col.Style == nil {
+		t.Fatalf("column = %+v", col)
+	}
+	// {V, W, X}: ↑ = {V, W} of 3; on volume among them = {V} → 2/3 1$.
+	if got := col.Cell(row(table, at, "V", "W", "X")); got != "2/3 1$" {
+		t.Errorf("merged = %q, want 2/3 1$", got)
+	}
+	// No ↑ members, volume measured: 0/2 0$ is a true statement.
+	if got := col.Cell(row(table, at, "B", "L")); got != "0/2 0$" {
+		t.Errorf("no-up = %q, want 0/2 0$", got)
+	}
+	// Price side gaps before the persistence horizon: whole cell gaps.
+	if got := col.Cell(row(table, open+2*60+5, "V", "W")); got != gap {
+		t.Errorf("pre-horizon = %q, want gap", got)
+	}
+	// Whole-cell highlight follows the price fraction alone (T7): 2/2 ↑ →
+	// green; a mixed basket → none.
+	if got := col.Style(row(table, at, "V", "W")); got != sgrGreen {
+		t.Errorf("style = %q, want green", got)
+	}
+	if got := col.Style(row(table, at, "V", "W", "X", "B")); got != "" {
+		t.Errorf("style = %q, want none", got)
+	}
+	// Unstyled variant carries no Style.
+	if vc.BreadthColumn(false).Style != nil {
+		t.Error("unstyled column carries a Style")
+	}
+	// Determinism.
+	if a, b := col.Cell(row(table, at, "V", "W", "X")), col.Cell(row(table, at, "V", "W", "X")); a != b {
+		t.Errorf("nondeterministic: %q vs %q", a, b)
+	}
+
+	// Volume side unmeasurable alone: U ↑ persistently on price but its
+	// profile median is 0 and N has no profile — zero volume-measured
+	// members, price measured → `1/2 ·$`, never `1/2 0$`.
+	table2 := ingest.NewTable([]string{"SPY", "U", "N"})
+	s := bucket.NewStore()
+	printSz(s, table2.Lookup("SPY"), open, 100, 1)
+	printSz(s, table2.Lookup("U"), open, 100, 1)
+	printSz(s, table2.Lookup("U"), open+70, 101, 5)
+	printSz(s, table2.Lookup("N"), open, 100, 1)
+	bc, err := New(s, table2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vc2 := NewVol(bc, s, map[string]*profile.Profile{"U": flatProfile("U", 0)})
+	if got := vc2.BreadthColumn(true).Cell(row(table2, at, "U", "N")); got != "1/2 ·$" {
+		t.Errorf("volume-unmeasured = %q, want 1/2 ·$", got)
+	}
+	// SPY missing: price side gaps → whole cell gaps even though V's
+	// volume is measurable.
+	table3 := ingest.NewTable([]string{"SPY", "V"})
+	s3 := bucket.NewStore()
+	printSz(s3, table3.Lookup("SPY"), open+300, 100, 1)
+	printSz(s3, table3.Lookup("V"), open, 100, 1)
+	for min := int64(1); min <= 3; min++ {
+		printSz(s3, table3.Lookup("V"), open+min*60+10, 100, 2)
+	}
+	bc3, err := New(s3, table3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vc3 := NewVol(bc3, s3, map[string]*profile.Profile{"V": flatProfile("V", 100)})
+	if got := vc3.BreadthColumn(true).Cell(row(table3, at, "V")); got != gap {
+		t.Errorf("SPY-missing = %q, want gap", got)
+	}
+}
+
 // TestVolumeLegends: the columns document themselves and carry no
 // buy/sell language (measurement statements only — scope law).
 func TestVolumeLegends(t *testing.T) {

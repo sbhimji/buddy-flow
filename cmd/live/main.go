@@ -129,7 +129,7 @@ func main() {
 		// 3.2b volume breadth: reuses the view's already-loaded
 		// per-ticker profiles.
 		vc := breadth.NewVol(bc, store, dv.Profiles())
-		cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, bc.Column(true), vc.UpOnVolColumn())
+		cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, vc.BreadthColumn(true))
 		// Premarket columns + pre-open rank (premarket-view-v0): where
 		// extended-hours dollars concentrate before the bell; frozen at
 		// 09:30 as context for the day.

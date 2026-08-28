@@ -411,7 +411,7 @@ func (c *Calc) Detail(basket string, atSec int64) string {
 	}
 	var sb strings.Builder
 	const ind = "    "
-	fmt.Fprintf(&sb, "%s%-6s  %8s  %7s  %8s  %9s  %7s  %6s  %6s  %9s", ind, "TICKER", "last", "open%", "cum_$", "cum_$_typ", "cum_$_z", "rvol", "$_z", "of_basket")
+	fmt.Fprintf(&sb, "%s%-6s  %8s  %7s  %8s  %9s  %7s  %7s  %6s  %9s", ind, "TICKER", "last", "open%", "cum_$", "cum_$_typ", "cum_$_z", "rvol_sh", "$_z", "of_basket")
 	if c.opts != nil {
 		fmt.Fprintf(&sb, "  %6s  %6s", "conv_z", "net_z")
 	}
@@ -434,7 +434,7 @@ func (c *Calc) Detail(basket string, atSec int64) string {
 		if sgr := styleZ(r.Z, r.ZOK); sgr != "" {
 			zcell = sgr + zcell + "\x1b[0m"
 		}
-		fmt.Fprintf(&sb, "%s%-6s  %8s  %7s  %8s  %9s  %s  %6s  %6s  %9s", ind, r.Symbol, last, open,
+		fmt.Fprintf(&sb, "%s%-6s  %8s  %7s  %8s  %9s  %s  %7s  %6s  %9s", ind, r.Symbol, last, open,
 			fusd(r.Cum, r.CumOK), fusd(r.Typ, r.TypOK), zcell, rvol, fz(r.DollarZ, r.DollarOK), of)
 		if c.opts != nil {
 			fmt.Fprintf(&sb, "  %6s  %6s", fz(r.ConvZ, r.ConvOK), fz(r.NetZ, r.NetOK))
@@ -613,7 +613,7 @@ open%             = % from the opening auction cross (cross VWAP = dollars/share
 cum_$             = dollars traded since the open through the last completed minute, including the opening auction
 cum_$_typ         = what cum_$ typically is by this minute for this ticker, median of the last 20 sessions
 cum_$_z           = how unusual today's cum_$ is vs those 20 sessions, in σ — ±2 highlighted (green above typical, red below); a measurement of dollars, not of direction
-rvol              = last full minute's shares vs the typical for that exact minute — 1.0 = normal pace (excludes auction crosses; cum_$ includes them — two slices on one screen, deliberately)
+rvol_sh           = last full minute's shares (not dollars — the basket columns are dollars) vs the typical for that exact minute — 1.0 = normal pace (excludes auction crosses; cum_$ includes them — two slices on one screen, deliberately)
 $_z               = last full minute's dollars vs the typical for that exact minute, in σ (excludes crosses)
 of_basket         = this ticker's share of its basket's cum_$ — the concentration number from the ticker's side
 conv_z / net_z    = last completed minute's options premium (conviction-weighted / unweighted; ask-side minus bid-side, calls positive puts negative) vs this ticker's own 20d matched-minute median/MAD; · until 10 profiled days (options profile gate) or when no options tape is wired

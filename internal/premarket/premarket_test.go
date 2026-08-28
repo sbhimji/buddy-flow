@@ -113,7 +113,9 @@ func TestExtendTraderRank(t *testing.T) {
 	c, table, pre, open := synth(t)
 	sentinel := func(rc *devview.RowCtx) (float64, bool) { return 42, true }
 	cols, rank, footer := c.ExtendTrader(nil, sentinel, "base\n")
-	if len(cols) != 3 || cols[0].Name != "pre_vol" || cols[1].Name != "pre_share" || cols[2].Name != "pre_conc" {
+	// MO-1: only pre_share rides on the session table; pre_vol/pre_conc
+	// return on the premarket tab (MO-7).
+	if len(cols) != 1 || cols[0].Name != "pre_share" {
 		t.Fatalf("columns = %v", cols)
 	}
 	// Pre-open (08:00): rank = pre_share, the premarket money story.
@@ -129,9 +131,14 @@ func TestExtendTraderRank(t *testing.T) {
 		t.Errorf("post-open rank = %v, %v; want sentinel 42", r, ok)
 	}
 	// Footer carries the base block plus every premarket definition.
-	for _, s := range []string{"base\n", "pre_vol", "pre_share", "pre_conc", "premarket caveat"} {
+	for _, s := range []string{"base\n", "pre_share", "premarket caveat"} {
 		if !strings.Contains(footer, s) {
 			t.Errorf("footer missing %q", s)
+		}
+	}
+	for _, s := range []string{"pre_vol", "pre_conc"} {
+		if strings.Contains(footer, s) {
+			t.Errorf("footer defines %q, which left the session table (MO-1)", s)
 		}
 	}
 	for _, banned := range []string{"buy", "sell", "Buy", "Sell"} {

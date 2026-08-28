@@ -159,6 +159,36 @@ func (vc *VolCalc) UpOnVolColumn() devview.Column {
 		}}
 }
 
+// BreadthColumn is the trader view's merged cell (MO-1, mini-spec
+// docs/mini-specs/metric-overload/MO-1-column-prune.md): `7/9 5$` — up/N
+// per 3.2 over full membership, then how many of those ↑ members are also
+// on unusual volume per 3.2b. One cell where the frame used to print
+// breadth's numerator twice. Gap rules are the two columns' own, preserved
+// exactly: when 3.2 breadth gaps the whole cell gaps; when only the
+// volume side is unmeasurable (zero volume-measured members) the cell
+// renders `7/9 ·$` — "cannot measure" is never "measured zero" (VB4).
+// styled applies T7's HighlightFrac rule to the whole cell (bold green
+// when more than HighlightFrac of full membership is persistently ↑, bold
+// red when more than HighlightFrac is persistently ↓) — the price
+// fraction alone decides the color, as before the merge.
+func (vc *VolCalc) BreadthColumn(styled bool) devview.Column {
+	col := devview.Column{Name: "breadth", Width: 9, Cell: func(rc *devview.RowCtx) string {
+		up, _, _, ok := vc.price.count(rc.Basket.States, rc.AtSec)
+		if !ok {
+			return gap
+		}
+		vol := gap
+		if _, _, _, upVol, priceOK, vok := vc.counts(rc.Basket.States, rc.AtSec); vok && priceOK {
+			vol = fmt.Sprint(upVol)
+		}
+		return fmt.Sprintf("%d/%d %s$", up, len(rc.Basket.States), vol)
+	}}
+	if styled {
+		col.Style = vc.price.Column(true).Style
+	}
+	return col
+}
+
 // VolDetailColumn is the direction-blind detail (dev view): members on
 // unusual volume / unmeasured (`7$ 2·`) over full membership — high `$`
 // with mixed price breadth reads as a two-sided fight, not a bid. Needs no

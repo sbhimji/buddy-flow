@@ -205,7 +205,7 @@ func main() {
 		// per-ticker profiles.
 		vc := breadth.NewVol(bc, store, dv.Profiles())
 		if *viewMode == "trader" {
-			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, bc.Column(true), vc.UpOnVolColumn())
+			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, vc.BreadthColumn(true))
 			// Premarket columns + pre-open rank (premarket-view-v0) —
 			// same composition as cmd/live so replays reproduce the
 			// trader's screen.

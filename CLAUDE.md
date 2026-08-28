@@ -5,7 +5,10 @@ concentrating across a ~191-symbol universe (164 basket members + benchmarks) gr
 22 baskets, whether it is rotating, and whether the buying is broad and aggressive or thin
 and passive. Primary user moment: 09:30–10:30 ET.
 
-**Status: pre-code.** The repo currently contains only `docs/`. Read these before doing
+**Status: building.** Phases 1–3 partial (capture/replay, 1-second store, 20-day profiles,
+FlowShare + breadth on a trader frame, per-ticker drill-down) and Phase 7 (options tape) landed;
+`docs/mini-specs/` is the story ledger, and `docs/mini-specs/metric-overload/` is the current
+curation pass (which columns stay, what merges, what gets added). Read these before doing
 anything substantive:
 
 - `docs/INITIAL-PROJECT.md` — the build spec: what the product is; §2 is the math and *is* the product.

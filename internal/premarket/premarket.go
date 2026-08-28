@@ -160,21 +160,32 @@ func (c *Calc) Columns() []devview.Column {
 	}
 }
 
+// SessionColumn is the one premarket column that stays on the session
+// table after MO-1 (docs/mini-specs/metric-overload/MO-1-column-prune.md):
+// pre_share, the pre-open rank key and the single post-open context
+// column. pre_vol and pre_conc return on the premarket tab (MO-7).
+func (c *Calc) SessionColumn() devview.Column {
+	for _, col := range c.Columns() {
+		if col.Name == "pre_share" {
+			return col
+		}
+	}
+	panic("premarket: pre_share column missing from Columns")
+}
+
 // PreFooter is the plain-English legend block appended to the trader
 // footer. Statements of measurement only (scope law).
-const PreFooter = `pre_vol           = dollars traded in this basket's stocks 04:00-09:30 ET (extended-hours prints; a separate lens — no regular-session number includes them)
-pre_share         = % of all premarket dollars across the tracked universe that went through this basket
-pre_conc          = the single stock carrying the largest share of this basket's premarket dollars
+const PreFooter = `pre_share         = % of all dollars traded 04:00-09:30 ET across the tracked universe (extended-hours prints; a separate lens — no regular-session number includes them) that went through this basket
 premarket caveat  = raw magnitudes only — no 20-day "typical" exists premarket; volumes are thin, lumpy, and heavily off-exchange. Until the open completes its first minute, rows sort by pre_share.
 `
 
-// ExtendTrader appends the premarket columns to the trader-view set, adds
-// the footer block, and installs the pre-open rank: before the first
-// completed session minute rows sort by pre_share (the premarket money
-// story); from then on the given rank (cum z) takes over. The fallback
-// keys on the CLOCK, never on gaps, so the two scales cannot mix.
+// ExtendTrader appends pre_share to the trader-view set, adds the footer
+// block, and installs the pre-open rank: before the first completed
+// session minute rows sort by pre_share (the premarket money story); from
+// then on the given rank (cum z) takes over. The fallback keys on the
+// CLOCK, never on gaps, so the two scales cannot mix.
 func (c *Calc) ExtendTrader(cols []devview.Column, rank func(*devview.RowCtx) (float64, bool), footer string) ([]devview.Column, func(*devview.RowCtx) (float64, bool), string) {
-	cols = append(cols, c.Columns()...)
+	cols = append(cols, c.SessionColumn())
 	wrapped := func(rc *devview.RowCtx) (float64, bool) {
 		if c.preOpen(rc.AtSec) {
 			return c.share(rc)

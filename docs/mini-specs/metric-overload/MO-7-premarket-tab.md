@@ -1,6 +1,6 @@
 # MO-7 — Premarket tab: its own frame, two-tab web server
 
-Status: **open** (written 2026-08-26). Owner decision **O4** (README).
+Status: **implemented on branch mo-7-premarket-tab, awaiting review** (written 2026-08-26; implemented 2026-08-27). Owner decision **O4** (README).
 Gated by MO-1 (which removes `pre_vol`/`pre_conc` from the session table).
 Read first: `premarket-view-v0.md`, `trader-view-live-cadence.md`,
 `tools/live_view_server.py` (frame split, `?basket=` drill), backlog

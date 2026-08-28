@@ -147,3 +147,33 @@ func TestExtendTraderRank(t *testing.T) {
 		}
 	}
 }
+
+// MO-7: the premarket tab's own composition — three columns, pre_share
+// rank that never hands over to the cum z, full footer.
+func TestTab(t *testing.T) {
+	c, table, pre, open := synth(t)
+	cols, rank, footer := c.Tab()
+	if len(cols) != 3 || cols[0].Name != "pre_vol" || cols[1].Name != "pre_share" || cols[2].Name != "pre_conc" {
+		t.Fatalf("columns = %v", cols)
+	}
+	// Rank is pre_share before AND after the open (frozen, never the cum z).
+	for _, at := range []int64{pre + 4*3600 + 5, open + 65, open + 330*60} {
+		if r, ok := rank(row(table, at, "A", "B")); !ok || r != 0.4 {
+			t.Errorf("rank at %d = %v, %v; want 0.4, true", at, r, ok)
+		}
+	}
+	// Before 04:00 the rank gaps (sorts last), as the cells do.
+	if _, ok := rank(row(table, pre-1, "A", "B")); ok {
+		t.Error("pre-04:00 rank defined; want gap")
+	}
+	for _, s := range []string{"pre_vol", "pre_share", "pre_conc", "premarket caveat", "no typical yet", "off-exchange"} {
+		if !strings.Contains(footer, s) {
+			t.Errorf("tab footer missing %q", s)
+		}
+	}
+	for _, banned := range []string{"buy", "sell", "Buy", "Sell"} {
+		if strings.Contains(footer, banned) {
+			t.Errorf("tab footer contains %q — scope law", banned)
+		}
+	}
+}

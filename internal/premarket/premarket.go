@@ -178,6 +178,24 @@ const PreFooter = `pre_share         = this basket's % of all dollars traded 04:
 premarket caveat  = raw magnitudes only — no 20-day "typical" exists premarket; volumes are thin, lumpy, and heavily off-exchange. Until the open completes its first minute, rows sort by pre_share.
 `
 
+// TabFooter is the premarket tab's legend (MO-7): the full three-column
+// form, statements of measurement only. The session table keeps the
+// shorter PreFooter (pre_share alone, MO-1).
+const TabFooter = `pre_vol           = dollars traded in this basket 04:00–09:30 ET (extended-hours prints — a separate lens; no regular-session number includes them); $0 is a measured zero
+pre_share         = this basket's % of all dollars traded 04:00–09:30 ET across the tracked universe; rows sort by it
+pre_conc          = the basket member with the most premarket dollars and its % of the basket's premarket dollars
+premarket caveat  = raw dollars; no typical yet — no 20-day "typical" exists premarket, so there is no z; volumes are thin, lumpy, and heavily off-exchange. Live until 09:30, then frozen as the day's context.
+`
+
+// Tab is the premarket frame's composition (MO-7, T3): the three premarket
+// columns, ranked by pre_share (gaps last, ties by name — the renderer's
+// order), with TabFooter. The same Calc serves live and replay; after
+// 09:30 every cell and the rank freeze with the window (premarket-view-v0:
+// kept on screen as context all day).
+func (c *Calc) Tab() ([]devview.Column, func(*devview.RowCtx) (float64, bool), string) {
+	return c.Columns(), c.share, TabFooter
+}
+
 // ExtendTrader appends pre_share to the trader-view set, adds the footer
 // block, and installs the pre-open rank: before the first completed
 // session minute rows sort by pre_share (the premarket money story); from

@@ -53,7 +53,7 @@ func main() {
 		bucketsPath = flag.String("buckets", "", "write the 1.4 bucket store CSV here after the run; empty = no buckets")
 		view        = flag.Bool("view", false, "3.0 developer view: auto-refreshing basket table (requires -capture; pace with -speed)")
 		profilesDir = flag.String("profiles", "data/profiles", "profile directory for -view baselines")
-		viewMode    = flag.String("view-mode", "dev", "-view column set: dev (all metrics, name order) or trader (trader-view-v0: cum-share story, cum-z sort, significance highlight)")
+		viewMode    = flag.String("view-mode", "dev", "-view column set: dev (all metrics, name order), trader (trader-view-v0: cum-share story, cum-z sort, significance highlight), or premarket (MO-7: the premarket tab's frame — pre_vol/pre_share/pre_conc ranked by pre_share, frozen at 09:30; the same composition cmd/live writes to -pre-log)")
 		viewAt      = flag.String("view-at", "", "also render the -view table as of this ET HH:MM:SS after the replay (spot checks; buckets are event-time keyed, so any past second is exact)")
 		basketName  = flag.String("basket", "", "ticker-view-v0 drill-down: render this basket's members under its row, or 'all' for every basket (trader mode only)")
 		drillPath   = flag.String("drill", "", "trader mode: rewrite this file (atomically, every 5s of event time) with every basket's ticker drill-down — tools/live_view_server.py --drill serves it as ?basket=NAME for a paced replay watched in the browser")
@@ -89,8 +89,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-view applies only to -capture replay")
 		os.Exit(2)
 	}
-	if *viewMode != "dev" && *viewMode != "trader" {
-		fmt.Fprintln(os.Stderr, "-view-mode must be dev or trader")
+	if *viewMode != "dev" && *viewMode != "trader" && *viewMode != "premarket" {
+		fmt.Fprintln(os.Stderr, "-view-mode must be dev, trader, or premarket")
 		os.Exit(2)
 	}
 	if *basketName != "" && (!*view || *viewMode != "trader") {
@@ -216,7 +216,17 @@ func main() {
 		// MO-3: delta / class% from the signed columns MO-2 stores; one
 		// Calc serves whichever column set is composed.
 		dc := delta.New(store)
-		if *viewMode == "trader" {
+		switch *viewMode {
+		case "premarket":
+			// MO-7 (T4 replay parity): the premarket tab's frame — the
+			// same premarket.Tab composition cmd/live renders to its
+			// -pre-log — so -view-at 08:00:00 checks and snapshots
+			// exercise the live code path.
+			cols, rank, footer := premarket.New(store, unionStates).Tab()
+			dv.SetColumns(cols)
+			dv.SetRank(rank)
+			dv.SetFooter(footer)
+		case "trader":
 			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, vc.BreadthColumn(true))
 			// Premarket columns + pre-open rank (premarket-view-v0) —
 			// same composition as cmd/live so replays reproduce the
@@ -256,7 +266,7 @@ func main() {
 			dv.SetRank(rank)
 			dv.SetFooter(footer)
 			dv.SetStatus(bc.Status)
-		} else {
+		default:
 			for _, c := range flowshare.Columns(store, unionStates, shares, floors) {
 				dv.Register(c)
 			}

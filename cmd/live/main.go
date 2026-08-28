@@ -51,6 +51,7 @@ func main() {
 		resume      = flag.Bool("resume", false, "append to an existing capture for today (deliberate mid-session restart ONLY — never run two instances at once)")
 		drillPath   = flag.String("drill", "", "with -view: rewrite this file (atomically, every -drill-every of event time) with every basket's ticker drill-down (ticker-view-v0) — tools/live_view_server.py --drill serves it as ?basket=NAME; empty = off")
 		drillEvery  = flag.Duration("drill-every", 5*time.Second, "event-time cadence of the -drill rewrite")
+		preLogPath  = flag.String("pre-log", "data/live-pre.log", "with -view: write the premarket frame (MO-7: pre_vol/pre_share/pre_conc ranked by pre_share, frozen at 09:30) here on every tick, a full-screen redraw per frame like live.log — tools/live_view_server.py --pre-log serves it as the PREMARKET tab; empty = off")
 	)
 	flag.Parse()
 
@@ -107,6 +108,7 @@ func main() {
 	// one (event-time buckets are the point).
 	var dv *devview.View
 	var drill *tickerview.DrillWriter
+	var pre *preLog
 	if *view {
 		bks, err := universe.LoadBaskets(*basketsPath)
 		if err != nil {
@@ -155,13 +157,33 @@ func main() {
 		dv.SetRank(rank)
 		dv.SetFooter(footer)
 		dv.SetStatus(bc.Status)
+		// MO-7: the premarket frame — a second view over the SAME store
+		// (T3: one renderer, two column sets), composed exactly as
+		// cmd/replay -view-mode premarket. It never observes the pipeline
+		// (dv holds the single observer slot and the clock); it only
+		// renders on dv's clock, so the two logs' clock lines agree.
+		if *preLogPath != "" {
+			pv, err := devview.New(store, table, bks, *profilesDir)
+			if err != nil {
+				fatal(err)
+			}
+			pcols, prank, pfooter := premarket.New(store, unionStates).Tab()
+			pv.SetColumns(pcols)
+			pv.SetRank(prank)
+			pv.SetFooter(pfooter)
+			f, err := os.Create(*preLogPath) // truncated at start, like live.log (8.1)
+			if err != nil {
+				fatal(fmt.Errorf("-pre-log: %w", err))
+			}
+			pre = &preLog{view: pv, w: f}
+		}
 		p.SetObserver(dv) // before Run starts (pipeline contract)
 	} else {
 		p.SetObserver(store) // before Run starts (pipeline contract)
 	}
 	pipeDone := make(chan struct{})
 	go func() { p.Run(); close(pipeDone) }()
-	stopRender := startRenderLoop(dv, drill)
+	stopRender := startRenderLoop(dv, drill, pre)
 
 	w.Control("start", fmt.Sprintf("universe=%d until=%s", len(syms), until.Format("15:04:05")))
 	fmt.Fprintf(logw, "capturing %d symbols (T+Q) to %s until %s ET\n", len(syms), capture.StreamPath(*outDir, date), until.Format("15:04:05"))
@@ -292,8 +314,9 @@ func main() {
 // clock (max SIP ts through the view) has crossed a second — the same
 // contract as cmd/replay's loop; the renderer itself is pure. Stop prints
 // the final table into scrollback (no clear) ahead of the session summary.
-// No-op when dv is nil. drill (optional) is refreshed on the same clock.
-func startRenderLoop(dv *devview.View, drill *tickerview.DrillWriter) (stop func()) {
+// No-op when dv is nil. drill and pre (both optional) are refreshed on the
+// same clock, so every frame of every log carries the same second.
+func startRenderLoop(dv *devview.View, drill *tickerview.DrillWriter, pre *preLog) (stop func()) {
 	if dv == nil {
 		return func() {}
 	}
@@ -314,6 +337,7 @@ func startRenderLoop(dv *devview.View, drill *tickerview.DrillWriter) (stop func
 					last = sec
 					fmt.Print("\033[H\033[2J" + dv.Render(sec))
 					drill.MaybeWrite(sec)
+					pre.write(sec)
 				}
 			}
 		}
@@ -325,7 +349,38 @@ func startRenderLoop(dv *devview.View, drill *tickerview.DrillWriter) (stop func
 			fmt.Println()
 			fmt.Print(dv.Render(sec))
 			drill.MaybeWrite(sec)
+			pre.write(sec)
 		}
+		pre.close()
+	}
+}
+
+// preLog is the premarket frame's sink (MO-7): the second view rendered
+// on the session view's clock, written as a full-screen redraw per frame —
+// the same framing as live.log, so tools/live_view_server.py's frame split
+// serves it unchanged. Nil-safe: a nil *preLog writes nothing.
+type preLog struct {
+	view *devview.View
+	w    *os.File
+	errs int
+}
+
+func (p *preLog) write(sec int64) {
+	if p == nil {
+		return
+	}
+	if _, err := fmt.Fprint(p.w, "\033[H\033[2J"+p.view.Render(sec)); err != nil {
+		// The premarket log is a follower's mirror, never the record: a
+		// write failure is reported once, not fatal to the capture.
+		if p.errs++; p.errs == 1 {
+			fmt.Fprintf(os.Stderr, "pre-log write failed (capture unaffected): %v\n", err)
+		}
+	}
+}
+
+func (p *preLog) close() {
+	if p != nil {
+		p.w.Close()
 	}
 }
 

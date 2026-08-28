@@ -17,6 +17,8 @@
     <string>/Users/saimbhimji/repo/buddy-flow/tools/live_view_server.py</string>
     <string>--drill</string>
     <string>/Users/saimbhimji/repo/buddy-flow/data/live-drill.txt</string>
+    <string>--pre-log</string>
+    <string>/Users/saimbhimji/repo/buddy-flow/data/live-pre.log</string>
   </array>
   <key>StartCalendarInterval</key>
   <array>

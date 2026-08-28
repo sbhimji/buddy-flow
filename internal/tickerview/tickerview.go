@@ -59,8 +59,10 @@ const (
 // + a minute reader). Nil means conv_z/net_z are not rendered at all.
 type OptionsSource struct {
 	// Minute returns the ticker's summed net_conviction and net_notional
-	// for the minute starting at minuteSec.
-	Minute   func(sym string, minuteSec int64) (netConv, netNotional float64)
+	// for the minute starting at minuteSec; ok=false when the minute is
+	// not measurable (unaligned, or the options tape has not reached its
+	// end) — rendered as a gap, never a fabricated zero (MO-4).
+	Minute   func(sym string, minuteSec int64) (netConv, netNotional float64, ok bool)
 	Profiles map[string]*optprofile.Profile // per ticker; a missing symbol renders gaps
 	Floors   *optprofile.Floors
 }
@@ -69,7 +71,7 @@ type OptionsSource struct {
 // (refusing a stale weights stamp) and binds a minute reader. A symbol
 // with no profile file is tolerated as a permanent gap (the options
 // universe may lag the equity one); a floors file is required.
-func LoadOptions(dir string, symbols []string, stamp string, minute func(sym string, minuteSec int64) (netConv, netNotional float64)) (*OptionsSource, error) {
+func LoadOptions(dir string, symbols []string, stamp string, minute func(sym string, minuteSec int64) (netConv, netNotional float64, ok bool)) (*OptionsSource, error) {
 	src := &OptionsSource{Minute: minute, Profiles: map[string]*optprofile.Profile{}}
 	for _, sym := range symbols {
 		p, err := optprofile.Read(dir, sym, stamp)
@@ -87,14 +89,14 @@ func LoadOptions(dir string, symbols []string, stamp string, minute func(sym str
 }
 
 // SessionMinutes adapts a read-back options bucket file (replay) to the
-// OptionsSource minute reader.
-func SessionMinutes(sess *optbucket.Session) func(sym string, minuteSec int64) (float64, float64) {
-	return func(sym string, minuteSec int64) (float64, float64) {
+// OptionsSource minute reader; an unaligned minute is ok=false.
+func SessionMinutes(sess *optbucket.Session) func(sym string, minuteSec int64) (float64, float64, bool) {
+	return func(sym string, minuteSec int64) (float64, float64, bool) {
 		b, err := sess.DeriveMinute(sym, minuteSec)
 		if err != nil {
-			return 0, 0
+			return 0, 0, false
 		}
-		return b.NetConviction, b.SignedNotional()
+		return b.NetConviction, b.SignedNotional(), true
 	}
 }
 
@@ -336,9 +338,10 @@ func (c *Calc) row(st *ingest.SymbolState, atSec int64, basketCum float64) Row {
 		if p := c.opts.Profiles[st.Symbol]; p != nil && c.opts.Floors != nil {
 			i := key - session.OpenMinute
 			if pr := p.Rows[i]; pr.Days >= optprofile.MinProfiledDays {
-				conv, net := c.opts.Minute(st.Symbol, c.frame.cmEnd-60)
-				r.ConvZ, r.ConvOK = zguard.Z(conv, pr.MedianNetConv, pr.SigmaNetConv, c.opts.Floors.NetConv[i])
-				r.NetZ, r.NetOK = zguard.Z(net, pr.MedianNetNotional, pr.SigmaNetNotional, c.opts.Floors.NetNotional[i])
+				if conv, net, ok := c.opts.Minute(st.Symbol, c.frame.cmEnd-60); ok {
+					r.ConvZ, r.ConvOK = zguard.Z(conv, pr.MedianNetConv, pr.SigmaNetConv, c.opts.Floors.NetConv[i])
+					r.NetZ, r.NetOK = zguard.Z(net, pr.MedianNetNotional, pr.SigmaNetNotional, c.opts.Floors.NetNotional[i])
+				}
 			}
 		}
 	}

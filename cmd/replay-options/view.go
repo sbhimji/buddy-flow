@@ -42,14 +42,28 @@ func renderSnapshot(store *optbucket.Store, baskets []universe.Basket, base *con
 		minNet, minConv    float64
 		convZ, netZ        string
 	}
+	minuteComplete := lastMinStart+60 <= atSec
+	minutes := conviction.StoreMinutes(store)
 	rows := make([]row, 0, len(baskets))
 	for _, bk := range baskets {
-		var cum, last optbucket.Bucket
+		var cum optbucket.Bucket
 		for _, sym := range bk.Members {
 			c := store.Window(sym, openSec, atSec)
 			cum.Add(&c)
-			m := store.Window(sym, lastMinStart, minInt64(lastMinStart+60, atSec))
-			last.Add(&m)
+		}
+		// The last-minute number has one code path: the shared basket-
+		// minute aggregation (MO-4 F4), which the equity screen's
+		// conv_z/net_z also use. Only the opening minute can be partial
+		// here (lastMinStart is otherwise the last COMPLETED minute);
+		// that partial window is summed the same way, clamped at atSec.
+		var minConv, minNet float64
+		var minOK bool
+		if minuteComplete {
+			minConv, minNet, minOK = conviction.BasketMinute(minutes, bk.Members, lastMinStart)
+		} else {
+			minConv, minNet, minOK = conviction.BasketMinute(func(sym string, _ int64) (optbucket.Bucket, bool) {
+				return store.Window(sym, lastMinStart, minInt64(lastMinStart+60, atSec)), true
+			}, bk.Members, lastMinStart)
 		}
 		gross := cum.PremCallAsk + cum.PremCallBid + cum.PremCallMid +
 			cum.PremPutAsk + cum.PremPutBid + cum.PremPutMid
@@ -57,15 +71,11 @@ func renderSnapshot(store *optbucket.Store, baskets []universe.Basket, base *con
 			name: bk.Name, prints: cum.Prints, contracts: cum.Contracts,
 			cumNet: cum.SignedNotional(), cumConv: cum.NetConviction,
 			cumSweep: cum.PremSweep, cumGross: gross,
-			minNet: last.SignedNotional(), minConv: last.NetConviction,
+			minNet: minNet, minConv: minConv,
 			convZ: "·", netZ: "·",
 		}
-		if base != nil && lastMinStart+60 <= atSec { // only a COMPLETED minute has a z
-			// The shared basket-minute aggregation (MO-4 F4) — the same
-			// arithmetic as `last` above over a completed minute, and the
-			// one the equity screen's conv_z/net_z will use.
-			conv, net := conviction.BasketMinute(conviction.StoreMinutes(store), bk.Members, lastMinStart)
-			cz, nz, cok, nok := base.Z(bk.Name, session.MinuteOfDay(lastMinStart*1_000_000_000), conv, net)
+		if base != nil && minuteComplete && minOK { // only a COMPLETED minute has a z
+			cz, nz, cok, nok := base.Z(bk.Name, session.MinuteOfDay(lastMinStart*1_000_000_000), minConv, minNet)
 			r.convZ, r.netZ = conviction.FormatZ(cz, cok), conviction.FormatZ(nz, nok)
 		}
 		rows = append(rows, r)

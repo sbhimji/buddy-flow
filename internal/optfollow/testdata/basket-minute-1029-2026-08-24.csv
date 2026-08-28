@@ -1,0 +1,7 @@
+# MO-4 done-when 4 fixture: the three baskets' 10:29 ET (minute_of_day 629) profile rows and the floors row,
+# frozen from data/profiles-options as built 2026-08-26 night (weights=options-weights-v1@4cf751d884f4;
+# 189 symbols x 20 days, 2026-07-29 .. 2026-08-25). The z digits below are reproducible only against these rows.
+# kind,name,minute_of_day,days,median_netconv,sigma_netconv,median_netnotional,sigma_netnotional,floor_basket_netconv,floor_basket_netnotional,want_conv_z,want_net_z
+basket,semis_compute,629,20,-83092.72187500002,937404.8595056249,-157748,1.8904269363e+06,18963.93080859375,24940.111875,-0.0,-0.0
+basket,proof_tier_ai_megacap,629,20,-433243.59062499995,1.1476110704624997e+06,-417821,1.561125909e+06,18963.93080859375,24940.111875,+0.6,+0.6
+basket,photonics_optics,629,20,-37961.59375,194682.31870499998,-15180,276019.34849999996,18963.93080859375,24940.111875,+2.7,+2.2

@@ -61,7 +61,12 @@ New `internal/optfollow`:
 3. `Follower.Minute` for one (symbol, minute) equals the 7.7 Python
    recomputation for that symbol-minute (the 7.7 script, per-ticker).
 4. `conviction.BasketMinute` reproduces the three 7.7-verified basket-minutes
-   (semis −0.0/−0.1, megacap +0.4/+0.4, photonics +2.7/+2.2 at 10:29 on 08-24).
+   (semis, megacap, photonics at 10:29 on 08-24): store-vs-session parity,
+   parity with the Python recomputation for the current profiles, and the z
+   digits asserted against the basket profile rows frozen into
+   `internal/optfollow/testdata/` — the on-disk profiles roll nightly, so
+   the digits are reproducible only against the frozen rows (7.7's
+   −0.0/−0.1, +0.4/+0.4, +2.7/+2.2 were the 08-24-night profiles' digits).
 
 ## Decisions consumed
 

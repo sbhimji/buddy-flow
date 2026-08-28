@@ -61,15 +61,17 @@ type Config struct {
 }
 
 // Follower is a running follow session. Store, Base and Stamp are fixed
-// at Start; Stats and Pipeline are written by the follow goroutine and
-// safe to read from Tick or after Done.
+// at Start; Progress and Clock are atomic snapshots safe from any
+// goroutine.
 type Follower struct {
-	Store    *optbucket.Store
-	Base     *conviction.Baselines // nil without ProfilesDir
-	Baskets  []universe.Basket
-	Stamp    string // "<version>@<hash>", the weights stamp
-	Stats    *uwfeed.DecodeStats
-	Pipeline *optingest.Pipeline
+	Store   *optbucket.Store
+	Base    *conviction.Baselines // nil without ProfilesDir
+	Baskets []universe.Basket
+	Stamp   string // "<version>@<hash>", the weights stamp
+
+	stats    uwfeed.DecodeStats
+	pipeline *optingest.Pipeline
+	clock    atomic.Int64 // latest RecvNs seen by Tick
 
 	capturePath string
 	manifest    string
@@ -114,15 +116,14 @@ func Start(cfg Config) (*Follower, error) {
 	}
 	f := &Follower{
 		Store: store, Base: base, Baskets: bks, Stamp: stamp,
-		Stats:       &uwfeed.DecodeStats{},
-		Pipeline:    optingest.NewPipeline(0),
+		pipeline:    optingest.NewPipeline(0),
 		capturePath: cfg.CapturePath,
 		manifest:    filepath.Join(filepath.Dir(cfg.CapturePath), ManifestName),
 		cfg:         cfg,
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
 	}
-	f.Pipeline.SetObserver(store) // before Run (pipeline contract)
+	f.pipeline.SetObserver(store) // before Run (pipeline contract)
 	go f.run()
 	return f, nil
 }
@@ -130,11 +131,11 @@ func Start(cfg Config) (*Follower, error) {
 func (f *Follower) run() {
 	defer close(f.done)
 	pipeDone := make(chan struct{})
-	go func() { f.Pipeline.Run(); close(pipeDone) }()
+	go func() { f.pipeline.Run(); close(pipeDone) }()
 	// Close the pipeline and drain it however we leave, so Done means
 	// "every print read is in the store".
 	defer func() {
-		f.Pipeline.Close()
+		f.pipeline.Close()
 		<-pipeDone
 	}()
 
@@ -159,9 +160,16 @@ func (f *Follower) run() {
 	if f.cfg.Opened != nil {
 		f.cfg.Opened()
 	}
-	f.err = uwfeed.FollowCapture(f.capturePath, f.Pipeline, f.Stats, uwfeed.FollowOptions{
+	f.err = uwfeed.FollowCapture(f.capturePath, f.pipeline, &f.stats, uwfeed.FollowOptions{
 		Poll: f.cfg.Poll,
-		Tick: f.cfg.Tick,
+		Tick: func(latestRecvNs int64) {
+			if latestRecvNs > f.clock.Load() {
+				f.clock.Store(latestRecvNs)
+			}
+			if f.cfg.Tick != nil {
+				f.cfg.Tick(latestRecvNs)
+			}
+		},
 		Done: func() bool { return f.stopped.Load() || f.sessionOver() },
 	})
 }
@@ -191,7 +199,7 @@ func (f *Follower) Signal() {
 // called, or a tail error — and the pipeline has drained.
 func (f *Follower) Done() <-chan struct{} { return f.done }
 
-// Err is the tail error, valid after Done (nil on a clean end).
+// Err is the tail error (nil on a clean end). Blocks until Done.
 func (f *Follower) Err() error {
 	<-f.done
 	return f.err
@@ -201,26 +209,46 @@ func (f *Follower) Err() error {
 // stopped while still waiting for it).
 func (f *Follower) Opened() bool { return f.opened.Load() }
 
+// Progress is the decode/pipeline telemetry (atomic snapshot): frames
+// and prints seen by the decoder, dupes dropped, decode errors.
+func (f *Follower) Progress() (frames, prints, dupes, decodeErrs int64) {
+	return f.stats.Frames.Load(), f.stats.Prints.Load(), f.pipeline.Dupes.Load(), f.stats.DecodeErrs.Load()
+}
+
+// Clock is the latest capture RecvNs seen by Tick — the follower's
+// notion of "how far the tape has been read". Heartbeat/ack records
+// advance it through a print-silent minute; 0 before the first record.
+func (f *Follower) Clock() int64 { return f.clock.Load() }
+
 // Drained blocks until the pipeline has consumed every print the decoder
-// has submitted so far. Call from Tick (the follow goroutine, where
-// Stats is stable) — drain-then-render is the 7.7 synchronization story
-// and it still holds; the store lock covers readers who do not wait.
+// has submitted so far — drain-then-render is the 7.7 synchronization
+// story and it still holds for a Tick-driven renderer; the store lock
+// covers readers who do not wait.
 func (f *Follower) Drained() {
-	for f.Pipeline.Processed.Load()+f.Pipeline.Dupes.Load() < f.Stats.Prints {
+	for f.pipeline.Processed.Load()+f.pipeline.Dupes.Load() < f.stats.Prints.Load() {
 		time.Sleep(2 * time.Millisecond)
 	}
 }
 
 // Minute is the per-ticker minute reader tickerview.LoadOptions takes
 // (F3): the store summed over [minuteSec, minuteSec+60) under the read
-// lock, net_notional derived from the slices (7.4).
-func (f *Follower) Minute(sym string, minuteSec int64) (netConv, netNotional float64) {
-	b := f.MinuteBucket(sym, minuteSec)
-	return b.NetConviction, b.SignedNotional()
+// lock, net_notional derived from the slices (7.4). ok=false — never a
+// fabricated zero — when the minute is unaligned, the capture has not
+// been opened, or the tape has not been read past the minute's end
+// (Clock < minuteSec+60, RecvNs-based).
+func (f *Follower) Minute(sym string, minuteSec int64) (netConv, netNotional float64, ok bool) {
+	b, ok := f.MinuteBucket(sym, minuteSec)
+	if !ok {
+		return 0, 0, false
+	}
+	return b.NetConviction, b.SignedNotional(), true
 }
 
 // MinuteBucket is the same read as a bucket — the conviction.MinuteBuckets
-// shape, for BasketMinute.
-func (f *Follower) MinuteBucket(sym string, minuteSec int64) optbucket.Bucket {
-	return f.Store.Window(sym, minuteSec, minuteSec+60)
+// shape, for BasketMinute — with the same ok gate.
+func (f *Follower) MinuteBucket(sym string, minuteSec int64) (optbucket.Bucket, bool) {
+	if minuteSec%60 != 0 || !f.Opened() || f.Clock() < (minuteSec+60)*1_000_000_000 {
+		return optbucket.Bucket{}, false
+	}
+	return f.Store.Window(sym, minuteSec, minuteSec+60), true
 }

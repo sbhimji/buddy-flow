@@ -43,9 +43,7 @@ type Bucket struct {
 // Store implements optingest.Observer. One writer (the pipeline's
 // consumer) and any number of readers on other goroutines (MO-4 F2): the
 // writer takes mu; Get/Window/Bounds/Totals take the read lock. MaxSec
-// stays atomic. WriteCSV and the telemetry counters (Unclassifiable,
-// SweepPrints, SidePrints) are read after the pipeline has drained, as
-// before — they are not covered by the read lock.
+// stays atomic. WriteCSV and Telemetry read under the read lock too.
 type Store struct {
 	mu          sync.RWMutex
 	weights     optclassify.Weights
@@ -60,9 +58,9 @@ type Store struct {
 	// for paced/follow views (atomic: read from the render goroutine).
 	MaxSec atomic.Int64
 
-	Unclassifiable int64 // K3 bad-expiry prints, stamped into the header (B5)
-	SweepPrints    int64 // classification-rate telemetry (7.3 done-when 3)
-	SidePrints     [3]int64
+	unclassifiable int64 // K3 bad-expiry prints, stamped into the header (B5)
+	sweepPrints    int64 // classification-rate telemetry (7.3 done-when 3)
+	sidePrints     [3]int64
 }
 
 // Side telemetry indices.
@@ -101,7 +99,7 @@ func (s *Store) ObserveOptionTrade(t *optingest.OptionTrade) {
 	}
 	p, ok := s.cls.Classify(t)
 	if !ok {
-		s.Unclassifiable++
+		s.unclassifiable++
 		return
 	}
 
@@ -138,7 +136,7 @@ func (s *Store) ObserveOptionTrade(t *optingest.OptionTrade) {
 	}
 	if p.IsSweep {
 		b.PremSweep += t.Premium
-		s.SweepPrints++
+		s.sweepPrints++
 	}
 	b.NetConviction += p.Weighted
 	if p.NoUPrice {
@@ -149,12 +147,34 @@ func (s *Store) ObserveOptionTrade(t *optingest.OptionTrade) {
 	}
 	switch p.Sign {
 	case 1:
-		s.SidePrints[sideAsk]++
+		s.sidePrints[sideAsk]++
 	case -1:
-		s.SidePrints[sideBid]++
+		s.sidePrints[sideBid]++
 	default:
-		s.SidePrints[sideZero]++
+		s.sidePrints[sideZero]++
 	}
+}
+
+// Telemetry is the classification-rate telemetry (7.3 done-when 3),
+// read under the lock.
+type Telemetry struct {
+	Unclassifiable int64    // K3 bad-expiry prints, stamped into the header (B5)
+	SweepPrints    int64    // prints on sweep condition codes
+	SidePrints     [3]int64 // [SideZero, SideAsk, SideBid]
+}
+
+// Side telemetry indices of Telemetry.SidePrints.
+const (
+	SideZero = sideZero // mid/no_side/absent
+	SideAsk  = sideAsk
+	SideBid  = sideBid
+)
+
+// Telemetry returns a snapshot of the store-wide counters.
+func (s *Store) Telemetry() Telemetry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return Telemetry{Unclassifiable: s.unclassifiable, SweepPrints: s.sweepPrints, SidePrints: s.sidePrints}
 }
 
 // Get returns a copy of one bucket (nil if silent) — a copy, so the caller
@@ -270,7 +290,7 @@ func (s *Store) WriteCSV(path string) (int, error) {
 	}
 	w := bufio.NewWriterSize(f, 1<<20)
 
-	fmt.Fprintf(w, "# options buckets (mini-spec 7.4): weights=%s; unclassifiable=%d\n", s.weightsName, s.Unclassifiable)
+	fmt.Fprintf(w, "# options buckets (mini-spec 7.4): weights=%s; unclassifiable=%d\n", s.weightsName, s.unclassifiable)
 	fmt.Fprintln(w, strings.Join(columns, ","))
 
 	syms := make([]string, 0, len(s.buckets))

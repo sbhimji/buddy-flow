@@ -1,0 +1,63 @@
+[H[2JFOLLOW 2026-08-24 — connected to the capture; the options tape prints from 09:30 ET. Table appears with the first print.
+[H[2JFOLLOW 2026-08-24  (Ctrl-C to stop; exits when the session manifest appears)  frames=2016349 prints=2013854 decode-errs=0
+
+OPTIONS FLOW 2026-08-24 at 10:36:00 ET — sums since 09:30; no baselines loaded (pass -profiles for z)
+basket                     prints  contracts    cum_net_$   cum_conv_$  sweep%   min_net_$  min_conv_$  conv_z   net_z
+semis_compute              285584    1694191      -$42.1M      -$41.7M    16.6      -$947k      -$2.0M       ·       ·
+proof_tier_ai_megacap      489017    2456419      -$54.8M      -$39.9M    23.8      -$1.4M      -$2.0M       ·       ·
+robotics_av                206644     824900      -$38.0M      -$25.3M    30.3       -$42k      -$363k       ·       ·
+memory_storage             149299     441808      -$51.0M      -$20.9M    10.6      -$1.6M      -$669k       ·       ·
+photonics_optics            26790      89917        $3.5M        $5.3M    10.5       -$10k       -$39k       ·       ·
+consumption_software         4958      16405        $3.8M        $2.7M    13.2        $95k        $47k       ·       ·
+semicap_frontend             8777      26371       -$2.4M       -$2.6M    14.5        $58k        $56k       ·       ·
+neoclouds_dc_builders       62058     390980       -$5.8M       -$2.5M    17.1       $220k       $353k       ·       ·
+power_equipment              6238      23052       -$3.2M       -$1.6M    13.1        $74k        $92k       ·       ·
+packaging_test_substrates     2704      14900       -$1.2M       -$1.5M    16.3        $22k        $16k       ·       ·
+promise_tier_ai             45107     207870        $1.7M        $1.1M    16.2        $81k        $42k       ·       ·
+quantum                     10932      43556       -$1.7M       -$894k    11.4         $5k         $6k       ·       ·
+semis_analog_power_auto      3652      12149        $1.2M        $880k     9.0       -$12k         $3k       ·       ·
+defense_primes               1697       4536       -$369k       -$681k     6.0         $1k       -$658       ·       ·
+critical_minerals            9462      65960       -$623k       -$675k    17.2       -$467         $6k       ·       ·
+fuel_cells_storage          16244      69422       -$368k        $502k    19.2       -$97k       -$46k       ·       ·
+space                       61169     335552       -$5.7M       -$259k    29.4       $413k       $350k       ·       ·
+defense_tech_growth         37559     194914        $3.1M        $207k    17.6       $163k        $32k       ·       ·
+networking_connectivity     34225     130898       -$5.5M       -$183k    13.8        $41k       $185k       ·       ·
+dc_reits                      115        224       -$547k       -$178k     2.2        $490        $245       ·       ·
+nuclear_fuel_cycle          15422      72472       -$668k       -$170k     8.3         $1k       -$15k       ·       ·
+epc_labor                     608       1295        $779k         $46k     6.1       -$24k       -$20k       ·       ·
+
+cum_net_$: ask-side minus bid-side premium, calls positive puts negative, summed over basket members since the open.
+cum_conv_$: the same premium weighted per print by sweep/moneyness/expiry/size-vs-OI (options-weights-v1).
+sweep%: share of gross premium printed on intermarket-sweep condition codes. min_*: last completed minute.
+[H[2JFOLLOW 2026-08-24  (Ctrl-C to stop; exits when the session manifest appears)  frames=2016349 prints=2013854 decode-errs=0
+
+OPTIONS FLOW 2026-08-24 at 10:36:00 ET — sums since 09:30; no baselines loaded (pass -profiles for z)
+basket                     prints  contracts    cum_net_$   cum_conv_$  sweep%   min_net_$  min_conv_$  conv_z   net_z
+semis_compute              285584    1694191      -$42.1M      -$41.7M    16.6      -$947k      -$2.0M       ·       ·
+proof_tier_ai_megacap      489017    2456419      -$54.8M      -$39.9M    23.8      -$1.4M      -$2.0M       ·       ·
+robotics_av                206644     824900      -$38.0M      -$25.3M    30.3       -$42k      -$363k       ·       ·
+memory_storage             149299     441808      -$51.0M      -$20.9M    10.6      -$1.6M      -$669k       ·       ·
+photonics_optics            26790      89917        $3.5M        $5.3M    10.5       -$10k       -$39k       ·       ·
+consumption_software         4958      16405        $3.8M        $2.7M    13.2        $95k        $47k       ·       ·
+semicap_frontend             8777      26371       -$2.4M       -$2.6M    14.5        $58k        $56k       ·       ·
+neoclouds_dc_builders       62058     390980       -$5.8M       -$2.5M    17.1       $220k       $353k       ·       ·
+power_equipment              6238      23052       -$3.2M       -$1.6M    13.1        $74k        $92k       ·       ·
+packaging_test_substrates     2704      14900       -$1.2M       -$1.5M    16.3        $22k        $16k       ·       ·
+promise_tier_ai             45107     207870        $1.7M        $1.1M    16.2        $81k        $42k       ·       ·
+quantum                     10932      43556       -$1.7M       -$894k    11.4         $5k         $6k       ·       ·
+semis_analog_power_auto      3652      12149        $1.2M        $880k     9.0       -$12k         $3k       ·       ·
+defense_primes               1697       4536       -$369k       -$681k     6.0         $1k       -$658       ·       ·
+critical_minerals            9462      65960       -$623k       -$675k    17.2       -$467         $6k       ·       ·
+fuel_cells_storage          16244      69422       -$368k        $502k    19.2       -$97k       -$46k       ·       ·
+space                       61169     335552       -$5.7M       -$259k    29.4       $413k       $350k       ·       ·
+defense_tech_growth         37559     194914        $3.1M        $207k    17.6       $163k        $32k       ·       ·
+networking_connectivity     34225     130898       -$5.5M       -$183k    13.8        $41k       $185k       ·       ·
+dc_reits                      115        224       -$547k       -$178k     2.2        $490        $245       ·       ·
+nuclear_fuel_cycle          15422      72472       -$668k       -$170k     8.3         $1k       -$15k       ·       ·
+epc_labor                     608       1295        $779k         $46k     6.1       -$24k       -$20k       ·       ·
+
+cum_net_$: ask-side minus bid-side premium, calls positive puts negative, summed over basket members since the open.
+cum_conv_$: the same premium weighted per print by sweep/moneyness/expiry/size-vs-OI (options-weights-v1).
+sweep%: share of gross premium printed on intermarket-sweep condition codes. min_*: last completed minute.
+
+follow ended: frames=2016349 prints=2013854 dupes=0 decode-errs=0

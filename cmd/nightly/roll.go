@@ -176,7 +176,7 @@ func (j *job) convertFullTape(zipPath, out string) error {
 		return fmt.Errorf("write %s: %w", writePath, err)
 	}
 	j.logf("options: %s rows=%d universe=%d canceled=%d decode-errs=%d dupes=%d unclassifiable=%d -> %d bucket rows (%s) in %s",
-		j.date, st.Rows, st.Universe, st.Canceled, st.DecodeErrs, p.Dupes.Load(), store.Unclassifiable, rows,
+		j.date, st.Rows, st.Universe, st.Canceled, st.DecodeErrs, p.Dupes.Load(), store.Telemetry().Unclassifiable, rows,
 		filepath.Base(writePath), time.Since(start).Round(time.Second))
 	if writePath != out {
 		return fmt.Errorf("tape for %s produced a partial bucket file; profiles will not include it", j.date)

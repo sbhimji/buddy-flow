@@ -79,14 +79,14 @@ func TestFollowCaptureGrowsAndStops(t *testing.T) {
 				f.WriteString("2 " + realAck + "\n3 " + realDataFrame + "\n")
 			}
 		},
-		Done: func() bool { return stats.Frames >= 3 },
+		Done: func() bool { return stats.Frames.Load() >= 3 },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.close()
-	if stats.Frames != 3 || stats.Prints != 2 || stats.Acks != 1 {
-		t.Errorf("stats = %+v", stats)
+	if stats.Frames.Load() != 3 || stats.Prints.Load() != 2 || stats.Acks.Load() != 1 {
+		t.Errorf("stats = frames %d prints %d acks %d", stats.Frames.Load(), stats.Prints.Load(), stats.Acks.Load())
 	}
 	if len(p.obs.got) != 1 || p.p.Dupes.Load() != 1 { // same print id twice → dedupe
 		t.Errorf("observed %d, dupes %d", len(p.obs.got), p.p.Dupes.Load())

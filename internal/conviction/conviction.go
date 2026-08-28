@@ -59,40 +59,52 @@ func (b *Baselines) Z(basket string, minuteOfDay int, netConv, netNotional float
 
 // MinuteBuckets reads one ticker's summed bucket over the minute starting
 // at minuteSec — the store's Window(sym, m, m+60) live, or a read-back
-// Session's DeriveMinute in replay.
-type MinuteBuckets func(sym string, minuteSec int64) optbucket.Bucket
+// Session's DeriveMinute in replay. ok=false means the minute is not
+// measurable (unaligned, or the tape has not reached its end yet) —
+// never a fabricated zero. A symbol merely absent from the store is a
+// legitimate empty bucket with ok=true.
+type MinuteBuckets func(sym string, minuteSec int64) (optbucket.Bucket, bool)
 
 // BasketMinute is the one basket-minute aggregation (MO-4 F4): member
 // buckets are summed in member order with Bucket.Add, then net_notional
 // is derived from the summed slices (7.4 SignedNotional) — exactly the
 // 7.7 snapshot's arithmetic, so the :8788 table and the equity screen's
-// conv_z/net_z can never disagree. The result is the pair Baselines.Z takes.
-func BasketMinute(read MinuteBuckets, members []string, minuteSec int64) (netConv, netNotional float64) {
+// conv_z/net_z can never disagree. The result is the pair Baselines.Z
+// takes; ok=false when any member's minute is not measurable.
+func BasketMinute(read MinuteBuckets, members []string, minuteSec int64) (netConv, netNotional float64, ok bool) {
 	var sum optbucket.Bucket
 	for _, sym := range members {
-		b := read(sym, minuteSec)
+		b, ok := read(sym, minuteSec)
+		if !ok {
+			return 0, 0, false
+		}
 		sum.Add(&b)
 	}
-	return sum.NetConviction, sum.SignedNotional()
+	return sum.NetConviction, sum.SignedNotional(), true
 }
 
-// StoreMinutes adapts a live store to MinuteBuckets (read lock inside Window).
+// StoreMinutes adapts a store to MinuteBuckets (read lock inside Window).
+// It gates on alignment only: the caller owns the "minute complete"
+// decision (the snapshot view decides from its own atSec; the live
+// Follower decides from its RecvNs clock).
 func StoreMinutes(store *optbucket.Store) MinuteBuckets {
-	return func(sym string, minuteSec int64) optbucket.Bucket {
-		return store.Window(sym, minuteSec, minuteSec+60)
+	return func(sym string, minuteSec int64) (optbucket.Bucket, bool) {
+		if minuteSec%60 != 0 {
+			return optbucket.Bucket{}, false
+		}
+		return store.Window(sym, minuteSec, minuteSec+60), true
 	}
 }
 
-// SessionMinutes adapts a read-back bucket file to MinuteBuckets. An
-// unaligned minute yields the empty bucket (DeriveMinute's refusal), as
-// tickerview.SessionMinutes does.
+// SessionMinutes adapts a read-back bucket file to MinuteBuckets; an
+// unaligned minute (DeriveMinute's refusal) is ok=false.
 func SessionMinutes(sess *optbucket.Session) MinuteBuckets {
-	return func(sym string, minuteSec int64) optbucket.Bucket {
+	return func(sym string, minuteSec int64) (optbucket.Bucket, bool) {
 		b, err := sess.DeriveMinute(sym, minuteSec)
 		if err != nil {
-			return optbucket.Bucket{}
+			return optbucket.Bucket{}, false
 		}
-		return b
+		return b, true
 	}
 }
 

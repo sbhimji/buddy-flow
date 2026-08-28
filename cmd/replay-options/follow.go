@@ -46,15 +46,30 @@ func runFollow(capturePath, weightsPath, basketsCfg, profilesDir string, refresh
 	if err != nil {
 		return err
 	}
-	v.store, v.p, v.stats, v.bks, v.base = f.Store, f.Pipeline, f.Stats, f.Baskets, f.Base
+	v.store, v.progress, v.drained, v.bks, v.base = f.Store, f.Progress, f.Drained, f.Baskets, f.Base
 	go func() { <-stop; f.Signal() }()
 	<-f.Done()
 	if !f.Opened() {
 		return nil // stopped while still waiting for the file
 	}
 	v.render(true)
-	fmt.Printf("\nfollow ended: frames=%d prints=%d dupes=%d decode-errs=%d\n", f.Stats.Frames, f.Stats.Prints, f.Pipeline.Dupes.Load(), f.Stats.DecodeErrs)
+	frames, prints, dupes, decodeErrs := f.Progress()
+	fmt.Printf("\nfollow ended: frames=%d prints=%d dupes=%d decode-errs=%d\n", frames, prints, dupes, decodeErrs)
 	return f.Err()
+}
+
+// pipelineProgress adapts a bare pipeline + decoder stats (the paced
+// -view path) to the viewer's progress/drain hooks.
+func pipelineProgress(p *optingest.Pipeline, stats *uwfeed.DecodeStats) (progress func() (int64, int64, int64, int64), drained func()) {
+	progress = func() (int64, int64, int64, int64) {
+		return stats.Frames.Load(), stats.Prints.Load(), p.Dupes.Load(), stats.DecodeErrs.Load()
+	}
+	drained = func() {
+		for p.Processed.Load()+p.Dupes.Load() < stats.Prints.Load() {
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	return
 }
 
 // viewer renders the basket table on an event-time cadence. Drain-then-
@@ -63,8 +78,8 @@ func runFollow(capturePath, weightsPath, basketsCfg, profilesDir string, refresh
 // goroutine while the producer is parked in this very call.
 type viewer struct {
 	store      *optbucket.Store
-	p          *optingest.Pipeline
-	stats      *uwfeed.DecodeStats
+	progress   func() (frames, prints, dupes, decodeErrs int64)
+	drained    func()
 	bks        []universe.Basket
 	base       *conviction.Baselines
 	refresh    time.Duration
@@ -81,16 +96,15 @@ func (v *viewer) render(final bool) {
 	if !final && maxSec-v.lastRender < int64(v.refresh/time.Second) {
 		return
 	}
-	for v.p.Processed.Load()+v.p.Dupes.Load() < v.stats.Prints {
-		time.Sleep(2 * time.Millisecond)
-	}
+	v.drained()
 	maxSec = v.store.MaxSec.Load() // may have advanced during the drain
 	if v.date == "" {
 		v.date = time.Unix(maxSec, 0).In(session.ET()).Format("2006-01-02")
 	}
 	v.lastRender = maxSec
 	fmt.Print("\033[H\033[2J")
-	fmt.Printf("%s  frames=%d prints=%d decode-errs=%d\n", v.header, v.stats.Frames, v.stats.Prints, v.stats.DecodeErrs)
+	frames, prints, _, decodeErrs := v.progress()
+	fmt.Printf("%s  frames=%d prints=%d decode-errs=%d\n", v.header, frames, prints, decodeErrs)
 	if err := renderSnapshot(v.store, v.bks, v.base, v.date, maxSec+1); err != nil {
 		fmt.Println("render:", err)
 	}

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.buddyflow.liveview</string>
+  <key>WorkingDirectory</key><string>/Users/saimbhimji/repo/buddy-flow</string>
+  <!-- Read-only web mirror of the trader view (tools/live_view_server.py):
+       tails data/live.log, serves http://<this-mac>:8787. Never touches the
+       capture. 06:00 MACHINE-LOCAL (Central) = 07:00 ET (owner choice 2026-08-18);
+       weekdays, matching com.buddyflow.live
+       (whose caffeinate keeps the Mac awake by this hour). If a prior
+       instance is somehow still running, the new launch exits on
+       port-in-use and the old one keeps serving - harmless either way. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/saimbhimji/repo/buddy-flow/tools/live_view_server.py</string>
+    <string>--drill</string>
+    <string>/Users/saimbhimji/repo/buddy-flow/data/live-drill.txt</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/Users/saimbhimji/repo/buddy-flow/data/liveview.log</string>
+  <key>StandardErrorPath</key><string>/Users/saimbhimji/repo/buddy-flow/data/liveview.err.log</string>
+</dict></plist>

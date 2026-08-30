@@ -1,7 +1,9 @@
 // Command profiles builds the 20-day per-ticker volume profiles from bucket
-// files (mini-spec 2.1 PR 2: bucket files in, profiles out) plus the σ floor
-// table _floors.csv (mini-spec 2.2, -sigma-floor-frac), and runs the RVOL
-// sanity check against a session's bucket file.
+// files (mini-spec 2.1 PR 2: bucket files in, profiles out) — including the
+// per-ticker cum-dollar family (ticker-view-v0) as extra columns of the same
+// per-ticker file — plus the σ floor table _floors.csv (mini-spec 2.2,
+// -sigma-floor-frac), and runs the RVOL sanity check against a session's
+// bucket file.
 //
 //	go run ./cmd/profiles -days 20 -through 2026-08-13
 //	go run ./cmd/profiles -rvol-check data/buckets/2026-08-14.csv -rvol-minute 13:00
@@ -174,9 +176,10 @@ func main() {
 	// printed for eyeballing only.
 	open, _ := floors.Minute(9*60 + 35)
 	mid, _ := floors.Minute(13 * 60)
-	fmt.Printf("σ floors (frac=%v): shares 09:35=%.4g 13:00=%.4g | dollars 09:35=%.4g 13:00=%.4g (expect 09:35 larger) | flowshare 09:35=%.4g 13:00=%.4g | cumshare 09:35=%.4g 13:00=%.4g (expect narrowing)\n",
+	fmt.Printf("σ floors (frac=%v): shares 09:35=%.4g 13:00=%.4g | dollars 09:35=%.4g 13:00=%.4g (expect 09:35 larger) | flowshare 09:35=%.4g 13:00=%.4g | cumshare 09:35=%.4g 13:00=%.4g (expect narrowing) | cumdollars 09:35=%.4g 13:00=%.4g (expect growing: cumulative)\n",
 		*floorFrac, open.SigmaFloorShares, mid.SigmaFloorShares, open.SigmaFloorDollars, mid.SigmaFloorDollars,
-		open.SigmaFloorFlowShare, mid.SigmaFloorFlowShare, open.SigmaFloorCumShare, mid.SigmaFloorCumShare)
+		open.SigmaFloorFlowShare, mid.SigmaFloorFlowShare, open.SigmaFloorCumShare, mid.SigmaFloorCumShare,
+		open.SigmaFloorCumDollars, mid.SigmaFloorCumDollars)
 }
 
 // discoverDays lists bucket files, prefers full-session files over

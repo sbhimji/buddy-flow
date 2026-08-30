@@ -16,15 +16,15 @@
     <string>-i</string>
     <string>/Users/saimbhimji/repo/buddy-flow/bin/nightly</string>
   </array>
-  <!-- 22:00 Central = 23:00 ET year-round (both zones switch DST together).
+  <!-- 23:00 Central = 00:00 ET year-round (both zones switch DST together; owner moved it to midnight ET 2026-08-26 after the vendor tape was not yet published at 23:00 ET).
        cmd/live stops at 20:00 ET; the UW full tape is published by ~18:10 ET. -->
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
-    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
-    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
-    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
-    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
   </array>
   <key>StandardOutPath</key><string>/Users/saimbhimji/repo/buddy-flow/data/nightly.log</string>
   <key>StandardErrorPath</key><string>/Users/saimbhimji/repo/buddy-flow/data/nightly.err.log</string>

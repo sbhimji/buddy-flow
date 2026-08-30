@@ -25,19 +25,25 @@ import (
 const FloorsFile = "_floors.csv"
 
 // FloorRow is one ET minute-of-day's σ floors. FlowShare is the 3.1 family:
-// frac × median across baskets of σ_share (see FlowShareFloors); the two
-// volume families come from ComputeFloors.
+// frac × median across baskets of σ_share (see FlowShareFloors); the volume
+// families (shares, dollars, and the ticker-view cum-dollar family) come
+// from ComputeFloors.
 type FloorRow struct {
-	MinuteOfDay         int
-	SigmaFloorShares    float64
-	SigmaFloorDollars   float64
-	SigmaFloorFlowShare float64
-	SigmaFloorCumShare  float64
+	MinuteOfDay          int
+	SigmaFloorShares     float64
+	SigmaFloorDollars    float64
+	SigmaFloorFlowShare  float64
+	SigmaFloorCumShare   float64
+	SigmaFloorCumDollars float64
 }
 
-// Floors is the full session's floor table.
+// Floors is the full session's floor table. HasCumDollars is false for a
+// _floors.csv written before the cum-dollar family existed — its
+// SigmaFloorCumDollars are absent, not zero, and any cum-dollar z must
+// null rather than run unguarded.
 type Floors struct {
-	Rows []FloorRow // indexed 0..389 = minute-of-day − session.OpenMinute
+	Rows          []FloorRow // indexed 0..389 = minute-of-day − session.OpenMinute
+	HasCumDollars bool
 }
 
 // Minute returns the floors for an ET minute-of-day, or false if the minute
@@ -66,24 +72,32 @@ func ComputeFloors(profiles []Profile, frac float64) (*Floors, error) {
 			return nil, fmt.Errorf("profile %s has %d rows, want %d", p.Symbol, len(p.Rows), session.MinutesPerSession)
 		}
 	}
-	fl := &Floors{Rows: make([]FloorRow, session.MinutesPerSession)}
+	fl := &Floors{Rows: make([]FloorRow, session.MinutesPerSession), HasCumDollars: true}
 	shares := make([]float64, len(profiles))
 	dollars := make([]float64, len(profiles))
+	cum := make([]float64, len(profiles))
 	for i := range fl.Rows {
 		for j, p := range profiles {
 			shares[j] = p.Rows[i].SigmaShares
 			dollars[j] = p.Rows[i].SigmaDollars
+			cum[j] = p.Rows[i].SigmaCumDollars
 		}
 		fl.Rows[i] = FloorRow{
-			MinuteOfDay:       session.OpenMinute + i,
-			SigmaFloorShares:  frac * median(shares),
-			SigmaFloorDollars: frac * median(dollars),
+			MinuteOfDay:          session.OpenMinute + i,
+			SigmaFloorShares:     frac * median(shares),
+			SigmaFloorDollars:    frac * median(dollars),
+			SigmaFloorCumDollars: frac * median(cum),
 		}
 	}
 	return fl, nil
 }
 
+// floorsHeader is required on read; cumDollarsFloorCol is the ticker-view
+// family, written by every build since and optional on read (an older
+// file loads with HasCumDollars=false).
 var floorsHeader = []string{"minute_of_day", "sigma_floor_shares", "sigma_floor_dollars", "sigma_floor_flowshare", "sigma_floor_cumshare"}
+
+const cumDollarsFloorCol = "sigma_floor_cumdollars"
 
 // WriteFloors persists the floor table as <dir>/_floors.csv, atomically,
 // deterministically. The leading comment line records the fraction and the
@@ -101,9 +115,10 @@ func WriteFloors(dir string, fl *Floors, frac float64, inputs string) error {
 	}
 	w := bufio.NewWriter(f)
 	fmt.Fprintf(w, "# sigma floors (mini-spec 2.2): sigma_floor_frac=%s; built from %s\n", fnum(frac), inputs)
-	fmt.Fprintln(w, strings.Join(floorsHeader, ","))
+	fmt.Fprintln(w, strings.Join(append(append([]string(nil), floorsHeader...), cumDollarsFloorCol), ","))
 	for _, r := range fl.Rows {
-		fmt.Fprintf(w, "%d,%s,%s,%s,%s\n", r.MinuteOfDay, fnum(r.SigmaFloorShares), fnum(r.SigmaFloorDollars), fnum(r.SigmaFloorFlowShare), fnum(r.SigmaFloorCumShare))
+		fmt.Fprintf(w, "%d,%s,%s,%s,%s,%s\n", r.MinuteOfDay, fnum(r.SigmaFloorShares), fnum(r.SigmaFloorDollars),
+			fnum(r.SigmaFloorFlowShare), fnum(r.SigmaFloorCumShare), fnum(r.SigmaFloorCumDollars))
 	}
 	if err := w.Flush(); err != nil {
 		f.Close()
@@ -149,6 +164,7 @@ func ReadFloors(dir string) (*Floors, error) {
 		}
 	}
 	fl := &Floors{}
+	_, fl.HasCumDollars = idx[cumDollarsFloorCol]
 	for sc.Scan() {
 		line++
 		fields := strings.Split(sc.Text(), ",")
@@ -176,6 +192,9 @@ func ReadFloors(dir string) (*Floors, error) {
 			SigmaFloorDollars:   pF("sigma_floor_dollars"),
 			SigmaFloorFlowShare: pF("sigma_floor_flowshare"),
 			SigmaFloorCumShare:  pF("sigma_floor_cumshare"),
+		}
+		if fl.HasCumDollars {
+			r.SigmaFloorCumDollars = pF(cumDollarsFloorCol)
 		}
 		if perr != nil {
 			return nil, fmt.Errorf("%s:%d: %w", path, line, perr)

@@ -99,11 +99,13 @@ type View struct {
 	baskets    []BasketRow
 	profiles   map[string]*profile.Profile
 	columns    []Column
-	rank       func(rc *RowCtx) (float64, bool) // optional row order (SetRank)
-	footer     string                           // optional fixed block below the table (SetFooter)
-	status     func(atSec int64) string         // optional clock-line status (SetStatus)
-	baseLegend bool                             // clock line carries the default columns' legend
-	clockNs    atomic.Int64                     // max SIP ts observed; the replayed session clock
+	rank       func(rc *RowCtx) (float64, bool)        // optional row order (SetRank)
+	footer     string                                  // optional fixed block below the table (SetFooter)
+	status     func(atSec int64) string                // optional clock-line status (SetStatus)
+	trailer    func(atSec int64) string                // optional block between table and footer (SetTrailer)
+	detail     func(basket string, atSec int64) string // optional block under one basket's row (SetDetail)
+	baseLegend bool                                    // clock line carries the default columns' legend
+	clockNs    atomic.Int64                            // max SIP ts observed; the replayed session clock
 }
 
 // New resolves baskets against the symbol table and loads every member's
@@ -175,6 +177,18 @@ func (v *View) SetFooter(footer string) { v.footer = footer }
 // render. The function must be pure in (store state, atSec) — Render's
 // determinism contract extends to it. Nil (the default) renders nothing.
 func (v *View) SetStatus(status func(atSec int64) string) { v.status = status }
+
+// SetTrailer installs a block rendered after the basket table and before
+// the footer (ticker-view-v0's crossings strip). Same purity contract as
+// SetStatus: the function must be pure in (store state, atSec); empty
+// renders nothing. Nil (the default) renders nothing.
+func (v *View) SetTrailer(trailer func(atSec int64) string) { v.trailer = trailer }
+
+// SetDetail installs a per-basket expansion: called after each basket's
+// row with that basket's name; a non-empty return is written directly
+// under the row (ticker-view-v0's drill-down — member rows under the
+// basket line). Pure in (store state, basket, atSec); nil renders nothing.
+func (v *View) SetDetail(detail func(basket string, atSec int64) string) { v.detail = detail }
 
 // ObserveTrade delegates to the store and advances the session clock.
 func (v *View) ObserveTrade(t *ingest.Trade) {
@@ -273,6 +287,10 @@ func defaultColumns() []Column {
 		}},
 	}
 }
+
+// FmtDollars is fmtDollars for other view packages (ticker-view-v0 renders
+// per-ticker dollars with the same figure discipline as the basket table).
+func FmtDollars(v float64) string { return fmtDollars(v) }
 
 // fmtDollars renders a dollar amount at three significant figures per unit
 // (550, 1.50k, 53.3M, 371M, 1.23B) so displayed operands reconcile with
@@ -384,6 +402,23 @@ func (v *View) Render(atSec int64) string {
 			sb.WriteString("  " + cell)
 		}
 		sb.WriteByte('\n')
+		if v.detail != nil {
+			if d := v.detail(b.Name, atSec); d != "" {
+				sb.WriteString(d)
+				if !strings.HasSuffix(d, "\n") {
+					sb.WriteByte('\n')
+				}
+			}
+		}
+	}
+	if v.trailer != nil {
+		if t := v.trailer(atSec); t != "" {
+			sb.WriteByte('\n')
+			sb.WriteString(t)
+			if !strings.HasSuffix(t, "\n") {
+				sb.WriteByte('\n')
+			}
+		}
 	}
 	if v.footer != "" {
 		sb.WriteByte('\n')

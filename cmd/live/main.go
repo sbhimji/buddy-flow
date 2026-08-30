@@ -34,6 +34,7 @@ import (
 	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
 	"buddy-flow/internal/premarket"
+	"buddy-flow/internal/tickerview"
 	"buddy-flow/internal/universe"
 )
 
@@ -47,6 +48,8 @@ func main() {
 		view        = flag.Bool("view", false, "trader view (trader-view-v0): live basket table on stdout; operational logs divert to stderr (2>live.log)")
 		profilesDir = flag.String("profiles", "data/profiles", "profile directory for -view baselines")
 		resume      = flag.Bool("resume", false, "append to an existing capture for today (deliberate mid-session restart ONLY — never run two instances at once)")
+		drillPath   = flag.String("drill", "", "with -view: rewrite this file (atomically, every -drill-every of event time) with every basket's ticker drill-down (ticker-view-v0) — tools/live_view_server.py --drill serves it as ?basket=NAME; empty = off")
+		drillEvery  = flag.Duration("drill-every", 5*time.Second, "event-time cadence of the -drill rewrite")
 	)
 	flag.Parse()
 
@@ -102,6 +105,7 @@ func main() {
 	// replay; the live SIP clock drives refresh exactly like the replayed
 	// one (event-time buckets are the point).
 	var dv *devview.View
+	var drill *tickerview.DrillWriter
 	if *view {
 		bks, err := universe.LoadBaskets(*basketsPath)
 		if err != nil {
@@ -130,6 +134,19 @@ func main() {
 		// extended-hours dollars concentrate before the bell; frozen at
 		// 09:30 as context for the day.
 		cols, rank, footer = premarket.New(store, unionStates).ExtendTrader(cols, rank, footer)
+		// Ticker view (ticker-view-v0): the crossings strip rides on every
+		// frame; every basket's drill-down goes to the -drill file for the
+		// frame server. No options tape here — conv_z/net_z are not
+		// rendered live in v0 (the options capture is a separate process).
+		tv, err := tickerview.New(store, table, bks, dv.Profiles(), floors, nil)
+		if err != nil {
+			fatal(err)
+		}
+		dv.SetTrailer(tv.Strip)
+		footer += tickerview.Footer
+		if *drillPath != "" {
+			drill = &tickerview.DrillWriter{Calc: tv, Path: *drillPath, Every: int64(drillEvery.Seconds())}
+		}
 		dv.SetColumns(cols)
 		dv.SetRank(rank)
 		dv.SetFooter(footer)
@@ -140,7 +157,7 @@ func main() {
 	}
 	pipeDone := make(chan struct{})
 	go func() { p.Run(); close(pipeDone) }()
-	stopRender := startRenderLoop(dv)
+	stopRender := startRenderLoop(dv, drill)
 
 	w.Control("start", fmt.Sprintf("universe=%d until=%s", len(syms), until.Format("15:04:05")))
 	fmt.Fprintf(logw, "capturing %d symbols (T+Q) to %s until %s ET\n", len(syms), capture.StreamPath(*outDir, date), until.Format("15:04:05"))
@@ -271,8 +288,8 @@ func main() {
 // clock (max SIP ts through the view) has crossed a second — the same
 // contract as cmd/replay's loop; the renderer itself is pure. Stop prints
 // the final table into scrollback (no clear) ahead of the session summary.
-// No-op when dv is nil.
-func startRenderLoop(dv *devview.View) (stop func()) {
+// No-op when dv is nil. drill (optional) is refreshed on the same clock.
+func startRenderLoop(dv *devview.View, drill *tickerview.DrillWriter) (stop func()) {
 	if dv == nil {
 		return func() {}
 	}
@@ -292,6 +309,7 @@ func startRenderLoop(dv *devview.View) (stop func()) {
 				if sec := dv.ClockSec(); sec > last {
 					last = sec
 					fmt.Print("\033[H\033[2J" + dv.Render(sec))
+					drill.MaybeWrite(sec)
 				}
 			}
 		}
@@ -302,6 +320,7 @@ func startRenderLoop(dv *devview.View) (stop func()) {
 		if sec := dv.ClockSec(); sec > 0 {
 			fmt.Println()
 			fmt.Print(dv.Render(sec))
+			drill.MaybeWrite(sec)
 		}
 	}
 }

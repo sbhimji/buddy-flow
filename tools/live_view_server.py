@@ -8,6 +8,12 @@ and serves it at / with 1-second polling. Stdlib only.
 
     python3 tools/live_view_server.py            # http://<this-mac>:8787
     python3 tools/live_view_server.py --port 9000 --log data/live.log
+    http://<this-mac>:8787/?basket=semis_compute          # ticker rows under that basket
+    http://<this-mac>:8787/?basket=semis_compute,quantum  # several open; ?basket=all
+
+The drill-down (ticker-view-v0) comes from the drill file cmd/live -view
+-drill writes (every basket's member rows, "## basket <name>" sections);
+this server only reads it. Without the flag the query renders a note.
 
 Stopgap for terminal-less mornings; the durable fix is the follow-mode
 replay view (see docs/backlog.md).
@@ -18,6 +24,7 @@ import html
 import os
 import re
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 FRAME_DELIM = b"\x1b[H\x1b[2J"  # cursor-home + clear-screen, printed at each frame start
@@ -38,13 +45,17 @@ PAGE = """<!doctype html>
   .f94{color:#9bd7ff} .f95{color:#ff9ada} .f96{color:#c4f4ff} .f97{color:#eceff4}
   .inv { background:#d8dee9; color:#0b0e12; }
   #age { color:#6b7386; font:11px Menlo, monospace; padding-bottom:6px; }
+  #nav { font:11px Menlo, monospace; color:#6b7386; padding-bottom:6px; }
+  a { color:#57c7ff; text-decoration:none; } a:hover { text-decoration:underline; }
+  a.sel { color:#f3f99d; font-weight:bold; }
   #age.stale { color:#ff6b6b; font-weight:bold; }
 </style></head>
-<body><div id="age">connecting…</div><pre id="t"></pre>
+<body><div id="nav">click a basket name to open/close its tickers · <a href="?basket=all">all</a> · <a href="?">none</a></div><div id="age">connecting…</div><pre id="t"></pre>
 <script>
+const basket = new URLSearchParams(location.search).get('basket') || '';
 async function tick() {
   try {
-    const r = await fetch('/frame', {cache: 'no-store'});
+    const r = await fetch('/frame' + (basket ? '?basket=' + encodeURIComponent(basket) : ''), {cache: 'no-store'});
     const age = parseFloat(r.headers.get('X-Log-Age-Seconds') || 'NaN');
     document.getElementById('t').innerHTML = await r.text();
     const el = document.getElementById('age');
@@ -122,17 +133,111 @@ def ansi_to_html(data):
     return "".join(out)
 
 
-def make_handler(log_path):
+BASKET_LINE = re.compile(r"^([A-Za-z0-9_]+)(?=\s)", re.M)
+
+
+def link_baskets(html_text, selected):
+    """Wrap each basket name (first token of a top-level table row) in a
+    link that toggles it in the selection (comma list in ?basket=). Table
+    rows are the lines after the BASKET header up to the first blank line;
+    drill-down rows are indented and skipped."""
+    lines = html_text.split("\n")
+    out, in_table = [], False
+    for ln in lines:
+        if ln.startswith("BASKET"):
+            in_table = True
+            out.append(ln)
+            continue
+        if in_table and ln == "":
+            in_table = False
+        if in_table and ln and not ln.startswith(" ") and not ln.startswith("<"):
+            m = BASKET_LINE.match(ln)
+            if m:
+                name = m.group(1)
+                on = name in selected or "all" in selected
+                nxt = [b for b in selected if b not in (name, "all")]
+                if not on:
+                    nxt.append(name)
+                href = "?basket=" + ",".join(nxt) if nxt else "?"
+                cls = ' class="sel"' if on else ""
+                ln = '<a href="%s"%s>%s</a>' % (href, cls, name) + ln[m.end():]
+        out.append(ln)
+    return "\n".join(out)
+
+
+def drill_sections(drill_path):
+    """Parse the drill file into {basket: body_bytes} (marker line dropped).
+    Returns (sections, note); note is set when the file cannot be served."""
+    if not drill_path:
+        return {}, b"(drill-down not served: start this server with --drill <file> and cmd/live -view -drill <file>)"
+    try:
+        with open(drill_path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        return {}, ("(drill file unreadable: %s)" % e).encode()
+    out = {}
+    for part in data.split(b"## basket ")[1:]:
+        name, _, body = part.partition(b"\n")
+        out[name.strip().decode()] = body.rstrip(b"\n")
+    return out, b""
+
+
+def splice_drill(frame, selected, drill_path):
+    """Insert each selected basket's ticker rows directly under that
+    basket's line in the table (never after the footer). "all" selects
+    every basket. Works on the raw ANSI bytes; conversion happens after."""
+    if not selected:
+        return frame
+    sections, note = drill_sections(drill_path)
+    want_all = "all" in selected
+    lines = frame.split(b"\n")
+    out, in_table, hit = [], False, False
+    for ln in lines:
+        out.append(ln)
+        plain = SGR.sub("", ln.decode("utf-8", "replace"))
+        if plain.startswith("BASKET"):
+            in_table = True
+            continue
+        if in_table and plain.strip() == "":
+            in_table = False
+        if not in_table or not plain or plain.startswith(" "):
+            continue
+        m = BASKET_LINE.match(plain)
+        if not m:
+            continue
+        name = m.group(1)
+        if not (want_all or name in selected):
+            continue
+        hit = True
+        if note:
+            out.append(b"    " + note)
+        elif name in sections:
+            out.append(sections[name])
+        else:
+            out.append(b"    (no rows for %s in the drill file yet)" % name.encode())
+    if not hit and not want_all:
+        out.append(b"(no basket named %s in the table)" % ",".join(selected).encode())
+    return b"\n".join(out)
+
+
+def make_handler(log_path, drill_path):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path == "/":
+            path, _, query = self.path.partition("?")
+            selected = []
+            for kv in query.split("&"):
+                k, _, v = kv.partition("=")
+                if k == "basket":
+                    selected = [b for b in urllib.parse.unquote(v).split(",") if b]
+            if path == "/":
                 body = PAGE.encode()
                 ctype = "text/html; charset=utf-8"
                 age = None
-            elif self.path == "/frame":
+            elif path == "/frame":
                 try:
                     frame, age = last_frame(log_path)
-                    body = ansi_to_html(frame).encode()
+                    frame = splice_drill(frame, selected, drill_path)
+                    body = link_baskets(ansi_to_html(frame), selected).encode()
                 except OSError as e:
                     body = html.escape("cannot read %s: %s" % (log_path, e)).encode()
                     age = None
@@ -160,9 +265,11 @@ def main():
     ap.add_argument("--log", default=os.path.join(os.path.dirname(__file__), "..", "data", "live.log"))
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--bind", default="0.0.0.0", help="0.0.0.0 = reachable on your LAN")
+    ap.add_argument("--drill", default="", help="drill file written by cmd/live -view -drill (serves ?basket=NAME)")
     args = ap.parse_args()
     log_path = os.path.abspath(args.log)
-    srv = ThreadingHTTPServer((args.bind, args.port), make_handler(log_path))
+    drill_path = os.path.abspath(args.drill) if args.drill else ""
+    srv = ThreadingHTTPServer((args.bind, args.port), make_handler(log_path, drill_path))
     print("serving %s on http://%s:%d (read-only tail)" % (log_path, args.bind, args.port))
     srv.serve_forever()
 

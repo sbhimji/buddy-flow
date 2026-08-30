@@ -189,3 +189,143 @@ func TestMedianEvenCount(t *testing.T) {
 		t.Errorf("constant series: med=%v sig=%v, want 5, 0 (MAD=0 stored, floor is 2.2's job)", m, sig)
 	}
 }
+
+// TestCumDollarsFamily: the ticker-view-v0 cum-dollar family is the
+// median/MAD over days of the day's CUMULATIVE auction-inclusive dollars
+// through each minute — hand-computable on three synthetic days, and
+// visibly not the running sum of per-minute medians.
+func TestCumDollarsFamily(t *testing.T) {
+	dir := t.TempDir()
+	syms := []string{"X"}
+	// Day d: opening cross 100 sh @ $1 at 09:30 (auction-inclusive only),
+	// then continuous prints of (day-specific) dollars at 09:30 and 09:31.
+	//   day1: cross 100, cont 10 @09:30, 20 @09:31
+	//   day2: cross 100, cont 30 @09:30, 40 @09:31
+	//   day3: cross 100, cont 50 @09:30, 0  @09:31
+	cont := [][2]float64{{10, 20}, {30, 40}, {50, 0}}
+	days := []Day{}
+	for i, date := range []string{"2026-08-11", "2026-08-12", "2026-08-13"} {
+		tbl := ingest.NewTable(syms)
+		s := bucket.NewStore()
+		open, err := session.BucketStart(date, session.OpenMinute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st := tbl.Lookup("X")
+		s.ObserveTrade(&ingest.Trade{State: st, Price: 1, Size: 100, SipTs: open * 1e9})
+		s.ObserveTrade(&ingest.Trade{State: st, Price: 1, Size: cont[i][0], SipTs: (open + 5) * 1e9})
+		if cont[i][1] > 0 {
+			s.ObserveTrade(&ingest.Trade{State: st, Price: 1, Size: cont[i][1], SipTs: (open + 65) * 1e9})
+		}
+		path := dir + "/" + date + ".trades-only.csv"
+		if _, err := s.WriteCSV(path); err != nil {
+			t.Fatal(err)
+		}
+		days = append(days, Day{Date: date, Path: path})
+	}
+	profs, err := Build(syms, days)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := profs[0]
+	if !p.HasCumDollars {
+		t.Fatal("Build must mark the cum family present")
+	}
+	r30, _ := p.Minute(session.OpenMinute)
+	r31, _ := p.Minute(session.OpenMinute + 1)
+	// Whether the 100-share print counted as a cross or continuous, it is in
+	// the auction-inclusive slice either way: cum@09:30 = {110,130,150},
+	// cum@09:31 = {130,170,150}. Medians 130 and 150; MADs: |{110,130,150}-130|
+	// = {20,0,20} → 20; |{130,170,150}-150| = {20,20,0} → 20.
+	if r30.MedianCumDollars != 130 || r31.MedianCumDollars != 150 {
+		t.Errorf("cum medians = %v, %v; want 130, 150", r30.MedianCumDollars, r31.MedianCumDollars)
+	}
+	mad := 20.0 // a variable: a constant product would fold at infinite precision
+	if want := mad * MADConsistency; r30.SigmaCumDollars != want || r31.SigmaCumDollars != want {
+		t.Errorf("cum sigmas = %v, %v; want %v", r30.SigmaCumDollars, r31.SigmaCumDollars, want)
+	}
+	// Sum-of-medians is NOT the family: per-minute medians of the counted
+	// slice at 09:31 = median{20,40,0} = 20, plus 09:30's median — never 150.
+	if r31.MedianDollars != 20 {
+		t.Errorf("per-minute median at 09:31 = %v, want 20", r31.MedianDollars)
+	}
+
+	// Round trip: written columns read back; an old-format file (no cum
+	// columns) loads with HasCumDollars=false and zero cum fields.
+	if err := Write(dir, profs); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Read(dir, "X")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !back.HasCumDollars || back.Rows[1].MedianCumDollars != 150 || back.Rows[1].SigmaCumDollars != r31.SigmaCumDollars {
+		t.Errorf("round trip lost the cum family: %+v", back.Rows[1])
+	}
+	raw, err := os.ReadFile(dir + "/X.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	var old []string
+	for _, l := range lines {
+		f := strings.Split(l, ",")
+		old = append(old, strings.Join(f[:6], ","))
+	}
+	if err := os.WriteFile(dir+"/OLD.csv", []byte(strings.Join(old, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldP, err := Read(dir, "OLD")
+	if err != nil {
+		t.Fatalf("old-format profile must still read: %v", err)
+	}
+	if oldP.HasCumDollars || oldP.Rows[1].MedianCumDollars != 0 {
+		t.Errorf("old-format profile claims a cum family: %+v", oldP.Rows[1])
+	}
+	if oldP.Rows[1].MedianDollars != 20 {
+		t.Errorf("old-format per-minute columns changed: %+v", oldP.Rows[1])
+	}
+
+	// Floors: sigma_floor_cumdollars = frac × median across tickers of the
+	// cum σ, written and read back; an old floors file reads with
+	// HasCumDollars=false.
+	fl, err := ComputeFloors(profs, 0.5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fl.Rows[1].SigmaFloorCumDollars; got != 0.5*r31.SigmaCumDollars {
+		t.Errorf("cum floor = %v, want %v", got, 0.5*r31.SigmaCumDollars)
+	}
+	fdir := t.TempDir()
+	if err := WriteFloors(fdir, fl, 0.5, "test"); err != nil {
+		t.Fatal(err)
+	}
+	rf, err := ReadFloors(fdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rf.HasCumDollars || rf.Rows[1].SigmaFloorCumDollars != fl.Rows[1].SigmaFloorCumDollars {
+		t.Errorf("floors round trip lost cumdollars: %+v", rf.Rows[1])
+	}
+	rawF, _ := os.ReadFile(fdir + "/" + FloorsFile)
+	var oldF []string
+	for _, l := range strings.Split(strings.TrimRight(string(rawF), "\n"), "\n") {
+		if strings.HasPrefix(l, "#") {
+			oldF = append(oldF, l)
+			continue
+		}
+		f := strings.Split(l, ",")
+		oldF = append(oldF, strings.Join(f[:5], ","))
+	}
+	odir := t.TempDir()
+	if err := os.WriteFile(odir+"/"+FloorsFile, []byte(strings.Join(oldF, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	of, err := ReadFloors(odir)
+	if err != nil {
+		t.Fatalf("old-format floors must still read: %v", err)
+	}
+	if of.HasCumDollars || of.Rows[1].SigmaFloorCumDollars != 0 {
+		t.Errorf("old-format floors claim a cumdollars family")
+	}
+}

@@ -20,7 +20,7 @@
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>: > /Users/saimbhimji/repo/buddy-flow/data/live.log; exec /usr/bin/caffeinate -i /Users/saimbhimji/repo/buddy-flow/bin/live -view</string>
+    <string>: > /Users/saimbhimji/repo/buddy-flow/data/live.log; exec /usr/bin/caffeinate -i /Users/saimbhimji/repo/buddy-flow/bin/live -view -drill /Users/saimbhimji/repo/buddy-flow/data/live-drill.txt</string>
   </array>
   <!-- 02:55 Central = 03:55 ET year-round (both zones switch DST together).
        Capture starts at launch; -until defaults to 20:00 ET inside cmd/live. -->

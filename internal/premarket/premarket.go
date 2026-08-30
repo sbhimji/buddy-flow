@@ -13,6 +13,7 @@ package premarket
 
 import (
 	"fmt"
+	"time"
 
 	"buddy-flow/internal/bucket"
 	"buddy-flow/internal/devview"
@@ -132,14 +133,8 @@ func (c *Calc) Columns() []devview.Column {
 			}
 			return fmtUSD(bd)
 		}},
-		{Name: "pre_share", Width: 9, Cell: func(rc *devview.RowCtx) string {
-			s, ok := c.share(rc)
-			if !ok {
-				return gap
-			}
-			return fmt.Sprintf("%.1f%%", 100*s)
-		}},
-		{Name: "pre_conc", Width: 12, Cell: func(rc *devview.RowCtx) string {
+		c.preShareColumn(),
+		{Name: "pre_conc", Width: 18, Cell: func(rc *devview.RowCtx) string {
 			if !c.memo(rc.AtSec) {
 				return gap
 			}
@@ -153,28 +148,89 @@ func (c *Calc) Columns() []devview.Column {
 				}
 			}
 			if total == 0 {
-				return gap // "X 0%" would be a fake statement
+				return gap // "X $0 0%" would be a fake statement
 			}
-			return fmt.Sprintf("%s %.0f%%", sym, 100*top/total)
+			// Top member, its dollars, its slice: "MU $1.2B 61%" — the
+			// dollars keep "EQIX 100%" of $3M distinguishable from
+			// "MU 61%" of $2B.
+			return fmt.Sprintf("%s %s %.0f%%", sym, fmtUSD(top), 100*top/total)
 		}},
 	}
 }
 
+// SessionColumn is the one premarket column that stays on the session
+// table after MO-1 (docs/mini-specs/metric-overload/MO-1-column-prune.md):
+// pre_share, the pre-open rank key and the single post-open context
+// column. pre_vol and pre_conc return on the premarket tab (MO-7).
+func (c *Calc) SessionColumn() devview.Column { return c.preShareColumn() }
+
+// preShareColumn is the basket's share of universe premarket dollars; gap
+// on a 0/0. One constructor serves both the full set and the session table.
+func (c *Calc) preShareColumn() devview.Column {
+	return devview.Column{Name: "pre_share", Width: 9, Cell: func(rc *devview.RowCtx) string {
+		s, ok := c.share(rc)
+		if !ok {
+			return gap
+		}
+		return fmt.Sprintf("%.1f%%", 100*s)
+	}}
+}
+
 // PreFooter is the plain-English legend block appended to the trader
 // footer. Statements of measurement only (scope law).
-const PreFooter = `pre_vol           = dollars traded in this basket's stocks 04:00-09:30 ET (extended-hours prints; a separate lens — no regular-session number includes them)
-pre_share         = % of all premarket dollars across the tracked universe that went through this basket
-pre_conc          = the single stock carrying the largest share of this basket's premarket dollars
+const PreFooter = `pre_share         = this basket's % of all dollars traded 04:00–09:30 ET across the tracked universe (extended-hours prints — a separate lens; no regular-session number includes them)
 premarket caveat  = raw magnitudes only — no 20-day "typical" exists premarket; volumes are thin, lumpy, and heavily off-exchange. Until the open completes its first minute, rows sort by pre_share.
 `
 
-// ExtendTrader appends the premarket columns to the trader-view set, adds
-// the footer block, and installs the pre-open rank: before the first
-// completed session minute rows sort by pre_share (the premarket money
-// story); from then on the given rank (cum z) takes over. The fallback
-// keys on the CLOCK, never on gaps, so the two scales cannot mix.
+// TabFooter is the premarket tab's legend (MO-7): the full three-column
+// form, statements of measurement only. The session table keeps the
+// shorter PreFooter (pre_share alone, MO-1).
+const TabFooter = `pre_vol           = dollars traded in this basket 04:00–09:30 ET (extended-hours prints — a separate lens; no regular-session number includes them); $0 = no prints captured in the window
+pre_share         = this basket's % of all dollars traded 04:00–09:30 ET across the tracked universe; rows sort by it
+pre_conc          = the basket member with the most premarket dollars, those dollars, and their % of the basket's premarket dollars
+premarket caveat  = raw dollars; no typical yet — no 20-day "typical" exists premarket, so there is no z; volumes are thin, lumpy, and heavily off-exchange. Live until 09:30, then frozen as the day's context.
+`
+
+// Tab is the premarket frame's composition (MO-7, T3): the three premarket
+// columns, ranked by pre_share (gaps last, ties by name — the renderer's
+// order), with TabFooter. The same Calc serves live and replay; after
+// 09:30 every cell and the rank freeze with the window (premarket-view-v0:
+// kept on screen as context all day).
+func (c *Calc) Tab() ([]devview.Column, func(*devview.RowCtx) (float64, bool), string) {
+	return c.Columns(), c.share, TabFooter
+}
+
+// Frozen reports whether the premarket window has closed at atSec (at or
+// after 09:30 ET on its date): every premarket cell then reads the full
+// window and no longer moves. False before the open or off a resolvable
+// date.
+func Frozen(atSec int64) bool {
+	open, err := session.BucketStart(session.Date(atSec*1e9), session.OpenMinute)
+	if err != nil {
+		return false
+	}
+	return atSec >= open
+}
+
+// Status is the premarket frame's clock-line status (MO-7): the window
+// the cells read and whether it is still moving. Pure in atSec.
+func (c *Calc) Status(atSec int64) string {
+	if Frozen(atSec) {
+		return "premarket window 04:00–09:30 frozen"
+	}
+	if _, _, ok := c.window(atSec); !ok {
+		return "premarket window 04:00–09:30 not yet open"
+	}
+	return "premarket window 04:00–" + time.Unix(atSec, 0).In(session.ET()).Format("15:04:05") + ", live"
+}
+
+// ExtendTrader appends pre_share to the trader-view set, adds the footer
+// block, and installs the pre-open rank: before the first completed
+// session minute rows sort by pre_share (the premarket money story); from
+// then on the given rank (cum z) takes over. The fallback keys on the
+// CLOCK, never on gaps, so the two scales cannot mix.
 func (c *Calc) ExtendTrader(cols []devview.Column, rank func(*devview.RowCtx) (float64, bool), footer string) ([]devview.Column, func(*devview.RowCtx) (float64, bool), string) {
-	cols = append(cols, c.Columns()...)
+	cols = append(cols, c.SessionColumn())
 	wrapped := func(rc *devview.RowCtx) (float64, bool) {
 		if c.preOpen(rc.AtSec) {
 			return c.share(rc)

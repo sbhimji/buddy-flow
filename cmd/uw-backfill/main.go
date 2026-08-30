@@ -111,7 +111,7 @@ func main() {
 		}
 		prints, _ := store.Totals()
 		fmt.Printf("%s: rows=%d universe=%d canceled=%d decode-errs=%d other=%d dupes=%d unclassifiable=%d -> %d bucket rows (%s) in %s\n",
-			date, st.Rows, st.Universe, st.Canceled, st.DecodeErrs, st.OtherSymbol, p.Dupes.Load(), store.Unclassifiable, rows,
+			date, st.Rows, st.Universe, st.Canceled, st.DecodeErrs, st.OtherSymbol, p.Dupes.Load(), store.Telemetry().Unclassifiable, rows,
 			filepath.Base(writePath), time.Since(start).Round(time.Second))
 		_ = prints
 		converted++

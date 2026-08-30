@@ -11,19 +11,22 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"buddy-flow/internal/optingest"
 )
 
 // DecodeStats counts what the decoder saw. Decode failures count, never
-// crash (R4): the frame is already safely in capture.
+// crash (R4): the frame is already safely in capture. Atomic so a
+// render loop on another goroutine can read them while the decoder runs
+// (MO-4).
 type DecodeStats struct {
-	Frames     int64
-	Prints     int64 // submitted to the pipeline (pre-dedupe)
-	Acks       int64
-	Controls   int64 // our _capture records (replay only)
-	DecodeErrs int64
-	NonTrade   int64 // well-formed tuple on a non-option_trades channel
+	Frames     atomic.Int64
+	Prints     atomic.Int64 // submitted to the pipeline (pre-dedupe)
+	Acks       atomic.Int64
+	Controls   atomic.Int64 // our _capture records (replay only)
+	DecodeErrs atomic.Int64
+	NonTrade   atomic.Int64 // well-formed tuple on a non-option_trades channel
 }
 
 // wirePrint mirrors the option_trades payload, wire-confirmed 2026-08-20
@@ -53,7 +56,7 @@ type wirePrint struct {
 // the pipeline. Returns silently on non-print frames (acks, controls,
 // other channels) — they are counted, not errors.
 func DecodeFrame(frame []byte, p *optingest.Pipeline, stats *DecodeStats) {
-	stats.Frames++
+	stats.Frames.Add(1)
 	var tuple []json.RawMessage
 	if json.Unmarshal(frame, &tuple) != nil || len(tuple) != 2 {
 		// Not a data tuple. Control records from our own capture are
@@ -63,19 +66,19 @@ func DecodeFrame(frame []byte, p *optingest.Pipeline, stats *DecodeStats) {
 		// session as decode errors). This path only runs on non-tuple
 		// frames, so the scan costs nothing on the print hot path.
 		if bytes.Contains(frame, []byte(`"_capture"`)) {
-			stats.Controls++
+			stats.Controls.Add(1)
 		} else {
-			stats.DecodeErrs++
+			stats.DecodeErrs.Add(1)
 		}
 		return
 	}
 	var ch string
 	if json.Unmarshal(tuple[0], &ch) != nil {
-		stats.DecodeErrs++
+		stats.DecodeErrs.Add(1)
 		return
 	}
 	if !strings.HasPrefix(ch, "option_trades:") {
-		stats.NonTrade++
+		stats.NonTrade.Add(1)
 		return
 	}
 	// Ack bodies carry "status"; prints never do.
@@ -83,21 +86,21 @@ func DecodeFrame(frame []byte, p *optingest.Pipeline, stats *DecodeStats) {
 		Status string `json:"status"`
 	}
 	if json.Unmarshal(tuple[1], &probe) == nil && probe.Status != "" {
-		stats.Acks++
+		stats.Acks.Add(1)
 		return
 	}
 	var w wirePrint
 	if err := json.Unmarshal(tuple[1], &w); err != nil {
-		stats.DecodeErrs++
+		stats.DecodeErrs.Add(1)
 		return
 	}
 	t, ok := normalizePrint(&w)
 	if !ok {
-		stats.DecodeErrs++
+		stats.DecodeErrs.Add(1)
 		return
 	}
 	p.Submit(t)
-	stats.Prints++
+	stats.Prints.Add(1)
 }
 
 // normalizePrint converts a wire payload to the typed print. All-or-

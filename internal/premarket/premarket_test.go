@@ -74,8 +74,8 @@ func TestPremarketHandComputed(t *testing.T) {
 	if got := cell(t, c, "pre_share", rc); got != "40.0%" {
 		t.Errorf("pre_share = %q, want 40.0%%", got)
 	}
-	if got := cell(t, c, "pre_conc", row(table, at, "A", "B", "C")); got != "C 60%" {
-		t.Errorf("pre_conc = %q, want C 60%%", got)
+	if got := cell(t, c, "pre_conc", row(table, at, "A", "B", "C")); got != "C $600 60%" {
+		t.Errorf("pre_conc = %q, want C $600 60%%", got)
 	}
 	// D traded nothing premarket: $0 is a TRUE measurement (window open),
 	// share 0.0%, but concentration gaps (no top member of nothing).
@@ -113,7 +113,9 @@ func TestExtendTraderRank(t *testing.T) {
 	c, table, pre, open := synth(t)
 	sentinel := func(rc *devview.RowCtx) (float64, bool) { return 42, true }
 	cols, rank, footer := c.ExtendTrader(nil, sentinel, "base\n")
-	if len(cols) != 3 || cols[0].Name != "pre_vol" || cols[1].Name != "pre_share" || cols[2].Name != "pre_conc" {
+	// MO-1: only pre_share rides on the session table; pre_vol/pre_conc
+	// return on the premarket tab (MO-7).
+	if len(cols) != 1 || cols[0].Name != "pre_share" {
 		t.Fatalf("columns = %v", cols)
 	}
 	// Pre-open (08:00): rank = pre_share, the premarket money story.
@@ -129,14 +131,106 @@ func TestExtendTraderRank(t *testing.T) {
 		t.Errorf("post-open rank = %v, %v; want sentinel 42", r, ok)
 	}
 	// Footer carries the base block plus every premarket definition.
-	for _, s := range []string{"base\n", "pre_vol", "pre_share", "pre_conc", "premarket caveat"} {
+	for _, s := range []string{"base\n", "pre_share", "premarket caveat"} {
 		if !strings.Contains(footer, s) {
 			t.Errorf("footer missing %q", s)
 		}
 	}
-	for _, banned := range []string{"buy", "sell", "Buy", "Sell"} {
-		if strings.Contains(footer, banned) {
-			t.Errorf("footer contains %q — scope law", banned)
+	for _, s := range []string{"pre_vol", "pre_conc"} {
+		if strings.Contains(footer, s) {
+			t.Errorf("footer defines %q, which left the session table (MO-1)", s)
 		}
 	}
+	scanFooter(t, footer)
+}
+
+// scanFooter is the scope-law scanner every footer in this package goes
+// through (the same banned-substring scan flowshare's / conviction's /
+// delta's footers use).
+func scanFooter(t *testing.T, footer string) {
+	t.Helper()
+	for _, banned := range []string{"buy", "sell", "Buy", "Sell", "bullish", "bearish", "signal"} {
+		if strings.Contains(footer, banned) {
+			t.Errorf("footer contains %q — scope law bans it", banned)
+		}
+	}
+}
+
+// MO-7: the premarket tab's own composition — three columns, pre_share
+// rank that never hands over to the cum z, full footer.
+func TestTab(t *testing.T) {
+	c, table, pre, open := synth(t)
+	cols, rank, footer := c.Tab()
+	if len(cols) != 3 || cols[0].Name != "pre_vol" || cols[1].Name != "pre_share" || cols[2].Name != "pre_conc" {
+		t.Fatalf("columns = %v", cols)
+	}
+	// Rank is pre_share before AND after the open (frozen, never the cum z).
+	for _, at := range []int64{pre + 4*3600 + 5, open + 65, open + 330*60} {
+		if r, ok := rank(row(table, at, "A", "B")); !ok || r != 0.4 {
+			t.Errorf("rank at %d = %v, %v; want 0.4, true", at, r, ok)
+		}
+	}
+	// Before 04:00 the rank gaps (sorts last), as the cells do.
+	if _, ok := rank(row(table, pre-1, "A", "B")); ok {
+		t.Error("pre-04:00 rank defined; want gap")
+	}
+	for _, s := range []string{"pre_vol", "pre_share", "pre_conc", "premarket caveat", "no typical yet", "off-exchange"} {
+		if !strings.Contains(footer, s) {
+			t.Errorf("tab footer missing %q", s)
+		}
+	}
+	scanFooter(t, footer)
+}
+
+// MO-7 review #5: the premarket frame is frozen after the open and
+// deterministic — the replay-path contract (-view-mode premarket at
+// 08:00 twice, and at 09:30 vs 09:45) at the cell level.
+func TestTabFrozenAndDeterministic(t *testing.T) {
+	c, table, pre, open := synth(t)
+	cols, _, _ := c.Tab()
+	render := func(calc *Calc, at int64) string {
+		var sb strings.Builder
+		for _, col := range calc.Columns() {
+			sb.WriteString(col.Cell(row(table, at, "A", "B", "C", "D")) + "|")
+		}
+		return sb.String()
+	}
+	_ = cols
+	frozen := render(c, open+65)
+	if got := render(c, open+330*60); got != frozen {
+		t.Errorf("15:00 cells %q != 09:31:05 cells %q (must be frozen)", got, frozen)
+	}
+	if got := render(c, open-1); got != frozen {
+		t.Errorf("09:29:59 cells %q != post-open cells %q (window already complete)", got, frozen)
+	}
+	// Determinism: a fresh Calc over the same store renders the same bytes.
+	c2 := New(c.store, c.union)
+	if a, b := render(c, pre+4*3600), render(c2, pre+4*3600); a != b {
+		t.Errorf("08:00 render differs across instances: %q vs %q", a, b)
+	}
+	if a := render(c, pre+4*3600); a != render(c, pre+4*3600) {
+		t.Error("08:00 render differs across calls")
+	}
+}
+
+// MO-7 review #3: the clock-line status names the window and whether it
+// still moves.
+func TestStatus(t *testing.T) {
+	c, _, pre, open := synth(t)
+	cases := map[int64]string{
+		pre - 1:      "premarket window 04:00–09:30 not yet open",
+		pre + 4*3600: "premarket window 04:00–08:00:00, live",
+		open - 1:     "premarket window 04:00–09:29:59, live",
+		open:         "premarket window 04:00–09:30 frozen",
+		open + 65:    "premarket window 04:00–09:30 frozen",
+	}
+	for at, want := range cases {
+		if got := c.Status(at); got != want {
+			t.Errorf("Status(%d) = %q, want %q", at, got, want)
+		}
+	}
+	if Frozen(open-1) || !Frozen(open) {
+		t.Error("Frozen boundary is 09:30:00")
+	}
+	scanFooter(t, c.Status(open))
 }

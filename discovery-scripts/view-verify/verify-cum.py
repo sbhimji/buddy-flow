@@ -77,6 +77,10 @@ def main():
     ap.add_argument("--at", default="13:01:00", help="render second, ET HH:MM:SS")
     ap.add_argument("--source", choices=["flat", "capture"], default="flat")
     ap.add_argument("--profiles", default="data/profiles")
+    ap.add_argument("--buckets", default=None,
+                    help="capture-derived bucket CSV for --source=capture "
+                         "(default data/buckets/<date>.partial.csv; a full-day "
+                         "file such as data/buckets/<date>.csv also works)")
     ap.add_argument("--baskets",
                     default="docs/foundations/morning-tape-baskets-v2.json")
     args = ap.parse_args()
@@ -97,7 +101,8 @@ def main():
     union = sorted({m for ms in baskets.values() for m in ms})
 
     flat = os.path.join(repo, "data", "buckets", args.date + ".trades-only.csv")
-    partial = os.path.join(repo, "data", "buckets", args.date + ".partial.csv")
+    partial = (os.path.join(repo, args.buckets) if args.buckets
+               else os.path.join(repo, "data", "buckets", args.date + ".partial.csv"))
     if args.source == "capture":
         dollars = load_dollars(partial, 0, end_sec)
     else:
@@ -125,13 +130,26 @@ def main():
         raise SystemExit("floor minute %d missing" % key_minute)
 
     # View side: rendered rows, ANSI stripped.
+    # Columns are located by header name, not position: MO-6 put `flags`
+    # leftmost and later stories may insert more. Every header token to the
+    # left of cum_share is one row token (flags is a single 6-rune string
+    # with no spaces), so the offset = 1 + (#header names before cum_share)
+    # holds for any prefix of single-token columns.
     ansi = re.compile("\x1b\\[[0-9;]*m")
     view = {}
+    idx = None
     with open(args.view_stdout) as f:
         for line in f:
             p = ansi.sub("", line).split()
-            if p and p[0] in baskets:
-                view[p[0]] = (p[1], p[2], p[3])  # cum_share, typ, z
+            if p and p[0] == "BASKET" and "cum_share" in p:
+                i = p.index("cum_share")
+                idx = (i, p.index("cum_share_typ"), p.index("cum_share_z"))
+                if idx != (i, i + 1, i + 2):
+                    raise SystemExit("cum_share/typ/z not adjacent in header: %s" % p)
+            elif p and p[0] in baskets and idx is not None:
+                view[p[0]] = tuple(p[j] for j in idx)  # cum_share, typ, z
+    if idx is None:
+        raise SystemExit("no BASKET header line with cum_share found in view stdout")
     missing = sorted(set(baskets) - set(view))
     if missing:
         raise SystemExit("baskets missing from view stdout: %s" % missing)

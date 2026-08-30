@@ -136,3 +136,57 @@ func MonitorLateness(class Class, conditions []int32) bool {
 	}
 	return false
 }
+
+// quoteUnusable is the story-3.3 (MO-2) NBBO-validity table: the quote
+// conditions under which the consolidated NBBO is NOT a book a print can be
+// classified against. The 0.3 policy doc deferred this table to 3.3's
+// appendix, which was never written; MO-2 defines it here, keyed on the
+// vendor's numeric quote-condition IDs (`type: quote_condition` /
+// `market_condition` in docs/foundations/massive-conditions.json).
+//
+// Principle: a quote is usable when it is a firm two-sided (or one-sided —
+// the price check handles a zero side) market. It is unusable when the SIP
+// says the market is closed, halted/paused, non-firm, an indication rather
+// than a quote, in an auction, or locked/crossed. Slow/manual quotes (3–12,
+// 71) remain firm quotes and stay usable. Regulatory/informational riders
+// (26, 28–30, 41, 42, 81, 82, 94) say nothing about firmness and stay usable.
+var quoteUnusable = map[int32]bool{
+	15: true, // Closed
+	17: true, // Fast Trading (UTP F): quotes not firm at displayed size
+	18: true, // Trading Range Indication: an indication, not a quote
+	19: true, // Market Maker Quotes Closed
+	20: true, // Non-Firm
+	21: true, // News Dissemination (halt)
+	22: true, // Order Influx (halt)
+	23: true, // Order Imbalance (halt)
+	27: true, // News Pending (halt)
+	32: true, // No Open / No Resume
+	40: true, // On Demand Auction
+	43: true, // LULD Trading Pause
+	84: true, // Crossed Market flag
+	85: true, // Locked Market flag: at/above ask and at/below bid both fire
+}
+
+// quoteKnown lists every quote-riding condition ID in the vendor table; an
+// ID outside it is UNKNOWN and, mirroring 0.3's quarantine, makes the book
+// unusable rather than silently trusted.
+var quoteKnown = map[int32]bool{
+	1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true, 9: true,
+	10: true, 11: true, 12: true, 13: true, 14: true, 16: true, 26: true,
+	28: true, 29: true, 30: true, 41: true, 42: true, 71: true, 81: true,
+	82: true, 94: true,
+}
+
+// QuoteUsable reports whether an NBBO update carrying these quote conditions
+// leaves the book usable for aggressor classification (story 3.3 / MO-2).
+// An empty list is a regular quote — the majority of the live tape carries
+// no `c` at all — and is usable. Any unusable or unknown ID wins
+// (exclusion-dominant, like Classify).
+func QuoteUsable(conditions []int32) bool {
+	for _, id := range conditions {
+		if quoteUnusable[id] || !quoteKnown[id] {
+			return false
+		}
+	}
+	return true
+}

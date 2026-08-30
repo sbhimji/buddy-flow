@@ -15,12 +15,19 @@
   <!-- 8.1: live.log is truncated at every start — the view server needs
        only the latest frame and frames are reproducible from replay.
        launchd opens StandardOutPath in append mode, so the truncation is
-       done by the shell wrapper before exec. -->
+       done by the shell wrapper before exec.
+       MO-7: -pre-log is the premarket frame (pre_vol/pre_share/pre_conc,
+       frozen at 09:30), written by cmd/live itself (truncated at start) and
+       served by the view server as the PREMARKET tab.
+       MO-5: -options-capture/-options-profiles follow the day's options
+       capture READ-ONLY (a stamp mismatch refuses only the options columns;
+       the equity table still starts); the date is resolved by the shell at
+       launch, in ET. cmd/live-options and :8788 are untouched. -->
   <key>ProgramArguments</key>
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>: > /Users/saimbhimji/repo/buddy-flow/data/live.log; exec /usr/bin/caffeinate -i /Users/saimbhimji/repo/buddy-flow/bin/live -view -drill /Users/saimbhimji/repo/buddy-flow/data/live-drill.txt</string>
+    <string>: > /Users/saimbhimji/repo/buddy-flow/data/live.log; exec /usr/bin/caffeinate -i /Users/saimbhimji/repo/buddy-flow/bin/live -view -drill /Users/saimbhimji/repo/buddy-flow/data/live-drill.txt -pre-log /Users/saimbhimji/repo/buddy-flow/data/live-pre.log -options-capture /Users/saimbhimji/repo/buddy-flow/data/capture-options/$(TZ=America/New_York date +%F)/stream.jsonl -options-profiles /Users/saimbhimji/repo/buddy-flow/data/profiles-options</string>
   </array>
   <!-- 02:55 Central = 03:55 ET year-round (both zones switch DST together).
        Capture starts at launch; -until defaults to 20:00 ET inside cmd/live. -->

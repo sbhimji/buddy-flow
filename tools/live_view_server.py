@@ -7,13 +7,23 @@ extracts the most recent complete frame, converts ANSI colors to HTML,
 and serves it at / with 1-second polling. Stdlib only.
 
     python3 tools/live_view_server.py            # http://<this-mac>:8787
-    python3 tools/live_view_server.py --port 9000 --log data/live.log
+    python3 tools/live_view_server.py --port 9000 --log data/live.log --pre-log data/live-pre.log
+    http://<this-mac>:8787/frame?tab=pre                  # the premarket frame (MO-7)
+    http://<this-mac>:8787/frame?tab=session              # the session frame (default)
     http://<this-mac>:8787/?basket=semis_compute          # ticker rows under that basket
     http://<this-mac>:8787/?basket=semis_compute,quantum  # several open; ?basket=all
 
 The drill-down (ticker-view-v0) comes from the drill file cmd/live -view
 -drill writes (every basket's member rows, "## basket <name>" sections);
 this server only reads it. Without the flag the query renders a note.
+
+Two tabs (MO-7): PREMARKET serves the premarket frame cmd/live -view
+-pre-log writes (pre_vol / pre_share / pre_conc, frozen at 09:30); SESSION
+serves data/live.log. The page picks the tab on load by the ET wall clock in
+the browser (before 09:30 -> premarket; otherwise session — the same rule as
+default_tab below), the trader switches any time, and the choice persists
+in sessionStorage for the day. Staleness is reported per tab. ?basket=
+(drill) applies to the session tab only.
 
 Stopgap for terminal-less mornings; the durable fix is the follow-mode
 replay view (see docs/backlog.md).
@@ -49,19 +59,60 @@ PAGE = """<!doctype html>
   a { color:#57c7ff; text-decoration:none; } a:hover { text-decoration:underline; }
   a.sel { color:#f3f99d; font-weight:bold; }
   #age.stale { color:#ff6b6b; font-weight:bold; }
+  #tabs { padding-bottom:8px; }
+  #tabs button { font:bold 12px Menlo, monospace; color:#6b7386; background:#161a21; border:1px solid #2e3440;
+                 padding:4px 14px; margin-right:6px; cursor:pointer; }
+  #tabs button.on { color:#f3f99d; border-color:#f3f99d; }
 </style></head>
-<body><div id="nav">click a basket name to open/close its tickers · <a href="?basket=all">all</a> · <a href="?">none</a></div><div id="age">connecting…</div><pre id="t"></pre>
+<body><div id="tabs"><button id="tab-pre">PREMARKET</button><button id="tab-session">SESSION</button></div>
+<div id="nav">click a basket name to open/close its tickers · <a href="?basket=all">all</a> · <a href="?">none</a></div><div id="age">connecting…</div><pre id="t"></pre>
 <script>
 const basket = new URLSearchParams(location.search).get('basket') || '';
+// Default tab by the ET wall clock in the browser (MO-7 T2): before 09:30
+// -> premarket, otherwise session. No server clock, no DST hand-rolling.
+// Mirrors default_tab() in the Python (unit-tested there).
+function etParts() {
+  const parts = new Intl.DateTimeFormat('en-US', {timeZone: 'America/New_York', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'}).formatToParts(new Date());
+  const get = t => parts.find(p => p.type === t).value;
+  return {h: parseInt(get('hour'), 10) % 24, m: parseInt(get('minute'), 10), date: get('year') + '-' + get('month') + '-' + get('day')};
+}
+function defaultTab() { const {h, m} = etParts(); return (h < 9 || (h === 9 && m < 30)) ? 'pre' : 'session'; }
+// A click is honored only on the same side of 09:30 on the same ET day;
+// otherwise the clock default wins. Pure; mirrors choose_tab() in the Python.
+function chooseTab(stored, side, today) {
+  if (stored && (stored.tab === 'pre' || stored.tab === 'session') && stored.side === side && stored.date === today) return stored.tab;
+  return side;
+}
+function readStored() { try { return JSON.parse(sessionStorage.getItem('tab') || 'null'); } catch (e) { return null; } }
+let side = defaultTab();
+let tab = chooseTab(readStored(), side, etParts().date);
+function setTab(t, clicked) {
+  tab = t;
+  if (clicked) { try { sessionStorage.setItem('tab', JSON.stringify({tab: t, side: side, date: etParts().date})); } catch (e) {} }
+  document.getElementById('tab-pre').className = t === 'pre' ? 'on' : '';
+  document.getElementById('tab-session').className = t === 'session' ? 'on' : '';
+  document.getElementById('nav').style.display = t === 'session' ? '' : 'none';
+  tick();
+}
+document.getElementById('tab-pre').onclick = () => setTab('pre', true);
+document.getElementById('tab-session').onclick = () => setTab('session', true);
+// When the clock crosses 09:30 the default flips once to SESSION (no
+// reload needed); a later click still wins until the next flip.
+setInterval(() => { const s = defaultTab(); if (s !== side) { side = s; setTab(s, false); } }, 30000);
 async function tick() {
+  const want = tab;
   try {
-    const r = await fetch('/frame' + (basket ? '?basket=' + encodeURIComponent(basket) : ''), {cache: 'no-store'});
+    const q = '?tab=' + want + (basket && want === 'session' ? '&basket=' + encodeURIComponent(basket) : '');
+    const r = await fetch('/frame' + q, {cache: 'no-store'});
     const age = parseFloat(r.headers.get('X-Log-Age-Seconds') || 'NaN');
-    document.getElementById('t').innerHTML = await r.text();
+    const text = await r.text();
+    if (want !== tab) return; // the trader switched mid-fetch; drop the stale tab's frame
+    document.getElementById('t').innerHTML = text;
     const el = document.getElementById('age');
-    if (isNaN(age)) { el.textContent = 'log age unknown'; el.className = ''; }
+    const name = want === 'pre' ? 'premarket log' : 'session log';
+    if (isNaN(age)) { el.textContent = name + ' age unknown'; el.className = ''; }
     else {
-      el.textContent = 'log written ' + age.toFixed(1) + 's ago';
+      el.textContent = name + ' written ' + age.toFixed(1) + 's ago';
       el.className = age > 10 ? 'stale' : '';
       if (age > 10) el.textContent += ' — view may be stale (capture stopped or market quiet)';
     }
@@ -70,9 +121,35 @@ async function tick() {
     document.getElementById('age').className = 'stale';
   }
 }
-tick(); setInterval(tick, 1000);
+setTab(tab, false); setInterval(tick, 1000);
 </script></body></html>
 """
+
+
+OPEN_HM = (9, 30)  # regular-session open, ET
+
+
+def default_tab(hour, minute):
+    """Which tab the page opens on, as a pure function of the ET wall clock
+    (MO-7 T2): 'pre' before 09:30 ET, 'session' from 09:30 on. The page's
+    JS applies the same rule from Intl.DateTimeFormat('America/New_York')."""
+    return "pre" if (hour, minute) < OPEN_HM else "session"
+
+
+def choose_tab(stored, side, today):
+    """The tab to show on load. `stored` is the trader's last explicit
+    click as {"tab", "side", "date"} (or None); `side` is default_tab() now;
+    `today` is the ET date. The click is honored only while it was made on
+    the same side of 09:30 on the same day — once the clock flips (or the
+    day changes) the clock default wins again. Mirrors chooseTab() in the
+    page's JS."""
+    if (stored and stored.get("tab") in TABS
+            and stored.get("side") == side and stored.get("date") == today):
+        return stored["tab"]
+    return side
+
+
+TABS = ("session", "pre")
 
 
 def last_frame(path):
@@ -83,9 +160,12 @@ def last_frame(path):
         chunk = f.read()
     age = time.time() - os.path.getmtime(path)
     frames = chunk.split(FRAME_DELIM)
-    # frames[0] is a partial head (or pre-frame output); prefer the last
-    # delimited frame, falling back one if the newest looks torn mid-write.
-    if len(frames) >= 3 and not frames[-1].endswith(b"\n"):
+    # frames[0] is a partial head (or pre-frame output). Serve the newest
+    # delimited frame only when it is complete (ends with a newline); a
+    # torn one falls back to the previous frame when there is one.
+    if len(frames) >= 2 and frames[-1].endswith(b"\n"):
+        return frames[-1], age
+    if len(frames) >= 3:
         return frames[-2], age
     if len(frames) >= 2:
         return frames[-1], age
@@ -220,28 +300,47 @@ def splice_drill(frame, selected, drill_path):
     return b"\n".join(out)
 
 
-def make_handler(log_path, drill_path):
+def make_handler(log_path, drill_path, pre_log_path=""):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             path, _, query = self.path.partition("?")
-            selected = []
+            selected, tab = [], "session"
             for kv in query.split("&"):
                 k, _, v = kv.partition("=")
                 if k == "basket":
                     selected = [b for b in urllib.parse.unquote(v).split(",") if b]
+                elif k == "tab":
+                    tab = v
             if path == "/":
                 body = PAGE.encode()
                 ctype = "text/html; charset=utf-8"
                 age = None
             elif path == "/frame":
-                try:
-                    frame, age = last_frame(log_path)
-                    frame = splice_drill(frame, selected, drill_path)
-                    body = link_baskets(ansi_to_html(frame), selected).encode()
-                except OSError as e:
-                    body = html.escape("cannot read %s: %s" % (log_path, e)).encode()
-                    age = None
+                if tab not in TABS:
+                    self.send_error(400, "tab must be one of %s" % ", ".join(TABS))
+                    return
                 ctype = "text/html; charset=utf-8"
+                if tab == "pre":
+                    # The premarket tab: no drill, no basket links — the
+                    # frame is the whole story (?basket= is ignored here).
+                    if not pre_log_path:
+                        body = b"(premarket tab not served: start this server with --pre-log <file> and cmd/live -view -pre-log <file>)"
+                        age = None
+                    else:
+                        try:
+                            frame, age = last_frame(pre_log_path)
+                            body = ansi_to_html(frame).encode()
+                        except OSError as e:
+                            body = html.escape("cannot read %s: %s" % (pre_log_path, e)).encode()
+                            age = None
+                else:
+                    try:
+                        frame, age = last_frame(log_path)
+                        frame = splice_drill(frame, selected, drill_path)
+                        body = link_baskets(ansi_to_html(frame), selected).encode()
+                    except OSError as e:
+                        body = html.escape("cannot read %s: %s" % (log_path, e)).encode()
+                        age = None
             else:
                 self.send_error(404)
                 return
@@ -266,11 +365,13 @@ def main():
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--bind", default="0.0.0.0", help="0.0.0.0 = reachable on your LAN")
     ap.add_argument("--drill", default="", help="drill file written by cmd/live -view -drill (serves ?basket=NAME)")
+    ap.add_argument("--pre-log", default="", help="premarket frame log written by cmd/live -view -pre-log (serves the PREMARKET tab, /frame?tab=pre); empty = tab renders a note")
     args = ap.parse_args()
     log_path = os.path.abspath(args.log)
     drill_path = os.path.abspath(args.drill) if args.drill else ""
-    srv = ThreadingHTTPServer((args.bind, args.port), make_handler(log_path, drill_path))
-    print("serving %s on http://%s:%d (read-only tail)" % (log_path, args.bind, args.port))
+    pre_log_path = os.path.abspath(args.pre_log) if args.pre_log else ""
+    srv = ThreadingHTTPServer((args.bind, args.port), make_handler(log_path, drill_path, pre_log_path))
+    print("serving %s (session) + %s (premarket) on http://%s:%d (read-only tail)" % (log_path, pre_log_path or "-", args.bind, args.port))
     srv.serve_forever()
 
 

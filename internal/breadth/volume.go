@@ -106,15 +106,19 @@ func (vc *VolCalc) vol(st *ingest.SymbolState, end int64) volState {
 }
 
 // counts tallies a basket at atSec: unusual/unmeasured over full
-// membership (direction-blind — needs no SPY), and the conjunction
-// upOnVol/up against the 3.2 price sides. priceOK is sides' own verdict —
-// the zero-measured gate lives in sides, its single owner, so this cell
-// and the 3.2 breadth cell reconcile by construction (VB4); ok=false
-// before the persistence horizon or with zero volume-measured members.
-func (vc *VolCalc) counts(members []*ingest.SymbolState, atSec int64) (unusual, unmeasured, up, upOnVol int, priceOK, ok bool) {
+// membership (direction-blind — needs no SPY), the 3.2 price side (up, and
+// priceOK — sides' own verdict; the zero-measured gate lives in sides, its
+// single owner, so every cell built here reconciles with the 3.2 breadth
+// cell by construction, VB4), and the conjunction: upOnVol = ↑ members on
+// unusual volume, unmeasuredUp = ↑ members whose volume has no basis.
+// volOK=false with zero volume-measured members — the volume fields are
+// then zero and must not be printed (a count over a wholly unmeasurable
+// set would present "cannot measure" as "measured zero"); the price side
+// is still reported. Everything is false before the persistence horizon.
+func (vc *VolCalc) counts(members []*ingest.SymbolState, atSec int64) (unusual, unmeasured, up, upOnVol, unmeasuredUp int, priceOK, volOK bool) {
 	end, ok := vc.memo(atSec)
 	if !ok {
-		return 0, 0, 0, 0, false, false
+		return 0, 0, 0, 0, 0, false, false
 	}
 	for _, st := range members {
 		switch vc.vol(st, end) {
@@ -124,23 +128,26 @@ func (vc *VolCalc) counts(members []*ingest.SymbolState, atSec int64) (unusual, 
 			unmeasured++
 		}
 	}
-	if unmeasured == len(members) {
-		return 0, 0, 0, 0, false, false // all-unmeasured basket: a count would be a fake statement
-	}
 	sides, priceOK := vc.price.sides(members, atSec)
 	if priceOK {
 		for i, m := range sides {
 			if m.side > 0 {
 				up++
-				// A price-↑ member that is volume-unmeasured counts in
-				// the denominator, never as on-volume (VB4).
-				if vc.vol(members[i], end) == volUnusual {
+				switch vc.vol(members[i], end) {
+				case volUnusual:
 					upOnVol++
+				case volUnmeasured:
+					// A price-↑ member that is volume-unmeasured counts in
+					// the denominator, never as on-volume (VB4).
+					unmeasuredUp++
 				}
 			}
 		}
 	}
-	return unusual, unmeasured, up, upOnVol, priceOK, true
+	if unmeasured == len(members) {
+		return 0, 0, up, 0, 0, priceOK, false
+	}
+	return unusual, unmeasured, up, upOnVol, unmeasuredUp, priceOK, true
 }
 
 // UpOnVolColumn is the conjunction cell (dev view): of the members 3.2
@@ -151,7 +158,7 @@ func (vc *VolCalc) UpOnVolColumn() devview.Column {
 	return devview.Column{Name: "up_on_vol", Width: 9,
 		Legend: fmt.Sprintf("up_on_vol = of breadth's ↑ members, those also >%.1fx their matched-minute median $vol for %d min", VolK, PersistMinutes),
 		Cell: func(rc *devview.RowCtx) string {
-			_, _, upN, upVol, priceOK, ok := vc.counts(rc.Basket.States, rc.AtSec)
+			_, _, upN, upVol, _, priceOK, ok := vc.counts(rc.Basket.States, rc.AtSec)
 			if !ok || !priceOK {
 				return gap
 			}
@@ -159,15 +166,69 @@ func (vc *VolCalc) UpOnVolColumn() devview.Column {
 		}}
 }
 
+// BreadthColumn is the trader view's merged cell (MO-1, mini-spec
+// docs/mini-specs/metric-overload/MO-1-column-prune.md): `7/9 5$` — up/N
+// per 3.2 over full membership, then how many of those ↑ members are also
+// on unusual volume per 3.2b. One cell where the frame used to print
+// breadth's numerator twice. Gap rules are the two columns' own, preserved
+// exactly, plus two MO-1 review rules:
+//   - 3.2 breadth gaps → the whole cell gaps;
+//   - the volume side cannot be counted — zero volume-measured members, or
+//     ANY ↑ member without a volume basis → `7/9 ·$` (a count over a
+//     partially unknown set is never printed; VB4);
+//   - no ↑ member → `0/8` with no $ term (there is nothing to count).
+//
+// Fixed-width `%2d/%-2d %2s$` keeps the slash and $ aligned down the
+// column (width 9 fits `12/12 12$`). styled applies T7's HighlightFrac rule
+// (Calc.Style) to the whole cell — the price fraction alone decides the
+// color, as before the merge.
+func (vc *VolCalc) BreadthColumn(styled bool) devview.Column {
+	col := devview.Column{Name: "breadth", Width: 9, Cell: func(rc *devview.RowCtx) string {
+		_, _, up, upVol, unmUp, priceOK, volOK := vc.counts(rc.Basket.States, rc.AtSec)
+		if !priceOK {
+			return gap
+		}
+		n := len(rc.Basket.States)
+		if up == 0 {
+			return fmt.Sprintf("%2d/%-2d    ", up, n)
+		}
+		vol := gap
+		if volOK && unmUp == 0 {
+			vol = fmt.Sprint(upVol)
+		}
+		return fmt.Sprintf("%2d/%-2d %2s$", up, n, vol)
+	}}
+	if styled {
+		col.Style = vc.price.Style
+	}
+	return col
+}
+
 // VolDetailColumn is the direction-blind detail (dev view): members on
 // unusual volume / unmeasured (`7$ 2·`) over full membership — high `$`
 // with mixed price breadth reads as a two-sided fight, not a bid. Needs no
 // SPY, so it still renders on price-gapped rows.
+// DollarFlag is the MO-6 `$` glyph predicate (G3): of the ↑ members the
+// merged breadth cell counts, at least half are also on unusual volume,
+// and at least one — `7/9 5$` lights, `7/9 3$` does not. It reads the
+// same counts the cell prints, so the glyph is a restatement of the
+// visible `k$` term: lit ⇔ k ≥ 1 and 2k ≥ up. ok=false whenever the cell
+// prints no $ count (breadth gap, no ↑ member, volume side unmeasurable
+// or partially unmeasured — `·$`); unlit is the column's only "no".
+// Always positive: the term has no sign.
+func (vc *VolCalc) DollarFlag(rc *devview.RowCtx) (lit, positive, ok bool) {
+	_, _, up, upVol, unmUp, priceOK, volOK := vc.counts(rc.Basket.States, rc.AtSec)
+	if !priceOK || up == 0 || !volOK || unmUp > 0 {
+		return false, false, false
+	}
+	return upVol >= 1 && 2*upVol >= up, true, true
+}
+
 func (vc *VolCalc) VolDetailColumn() devview.Column {
 	return devview.Column{Name: "vol_detail", Width: 9,
 		Legend: "vol_detail = members on unusual volume $ / unmeasured ·",
 		Cell: func(rc *devview.RowCtx) string {
-			unusual, unmeasured, _, _, _, ok := vc.counts(rc.Basket.States, rc.AtSec)
+			unusual, unmeasured, _, _, _, _, ok := vc.counts(rc.Basket.States, rc.AtSec)
 			if !ok {
 				return gap
 			}

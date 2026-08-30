@@ -99,21 +99,7 @@ func TestVolumeBreadthHandComputed(t *testing.T) {
 // on-volume (VB4). The basket needs one volume-MEASURED sibling — with
 // zero volume-measured members the whole cell gaps (TestVolumeGaps).
 func TestVolumeUnmeasuredUpMember(t *testing.T) {
-	table := ingest.NewTable([]string{"SPY", "U", "N"})
-	s := bucket.NewStore()
-	open := synthOpen(t)
-	printSz(s, table.Lookup("SPY"), open, 100, 1)
-	printSz(s, table.Lookup("U"), open, 100, 1)
-	printSz(s, table.Lookup("U"), open+70, 101, 5) // ↑ persistent; volume has no basis
-	printSz(s, table.Lookup("N"), open, 100, 1)    // flat, quiet, measured
-	bc, err := New(s, table)
-	if err != nil {
-		t.Fatal(err)
-	}
-	vc := NewVol(bc, s, map[string]*profile.Profile{
-		"U": flatProfile("U", 0), "N": flatProfile("N", 100),
-	})
-	at := open + 4*60 + 5
+	vc, table, at := unmeasuredUpSynth(t, true)
 	if got := vc.UpOnVolColumn().Cell(row(table, at, "U", "N")); got != "0/1" {
 		t.Errorf("unmeasured-up = %q, want 0/1", got)
 	}
@@ -146,6 +132,44 @@ func TestVolumeGaps(t *testing.T) {
 // TestVolumeSPYMissing: no SPY prints in the needed windows — the price
 // side gaps, so up_on_vol gaps; vol_detail needs no SPY and still renders.
 func TestVolumeSPYMissing(t *testing.T) {
+	vc, table, at := spyMissingSynth(t)
+	if got := vc.UpOnVolColumn().Cell(row(table, at, "V")); got != gap {
+		t.Errorf("SPY-missing up_on_vol = %q, want gap", got)
+	}
+	if got := vc.VolDetailColumn().Cell(row(table, at, "V")); got != "1$ 0·" {
+		t.Errorf("SPY-missing vol_detail = %q, want 1$ 0·", got)
+	}
+}
+
+// unmeasuredUpSynth: U is persistently ↑ on price but its volume has no
+// basis (median-0 profile); N is flat, quiet, and (when measuredSibling)
+// volume-measured. Render second 09:34:05. Shared by the up_on_vol and
+// merged-cell tests.
+func unmeasuredUpSynth(t *testing.T, measuredSibling bool) (*VolCalc, *ingest.Table, int64) {
+	t.Helper()
+	table := ingest.NewTable([]string{"SPY", "U", "N"})
+	s := bucket.NewStore()
+	open := synthOpen(t)
+	printSz(s, table.Lookup("SPY"), open, 100, 1)
+	printSz(s, table.Lookup("U"), open, 100, 1)
+	printSz(s, table.Lookup("U"), open+70, 101, 5) // ↑ persistent; volume has no basis
+	printSz(s, table.Lookup("N"), open, 100, 1)    // flat, quiet
+	bc, err := New(s, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles := map[string]*profile.Profile{"U": flatProfile("U", 0)}
+	if measuredSibling {
+		profiles["N"] = flatProfile("N", 100)
+	}
+	return NewVol(bc, s, profiles), table, open + 4*60 + 5
+}
+
+// spyMissingSynth: SPY first prints 09:35, so every price window through
+// the 09:34:05 render is unmeasurable; V is flat on $200/min (unusual vs a
+// $100 median). Shared by the up_on_vol and merged-cell tests.
+func spyMissingSynth(t *testing.T) (*VolCalc, *ingest.Table, int64) {
+	t.Helper()
 	table := ingest.NewTable([]string{"SPY", "V"})
 	s := bucket.NewStore()
 	open := synthOpen(t)
@@ -158,13 +182,77 @@ func TestVolumeSPYMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vc := NewVol(bc, s, map[string]*profile.Profile{"V": flatProfile("V", 100)})
-	at := open + 4*60 + 5
-	if got := vc.UpOnVolColumn().Cell(row(table, at, "V")); got != gap {
-		t.Errorf("SPY-missing up_on_vol = %q, want gap", got)
+	return NewVol(bc, s, map[string]*profile.Profile{"V": flatProfile("V", 100)}), table, open + 4*60 + 5
+}
+
+// TestBreadthMerged: the MO-1 trader cell `x/y z$` — 3.2 breadth over full
+// membership, then the ↑ members also on unusual volume — fixed-width so
+// the slash and $ align, with the VB4 gap rules preserved: price-side gap →
+// whole cell gaps; volume side uncountable → `x/y ·$`; no ↑ member → no $
+// term.
+func TestBreadthMerged(t *testing.T) {
+	vc, table, open := volSynth(t)
+	at := open + 4*60 + 5 // 09:34:05
+	col := vc.BreadthColumn(true)
+	if col.Name != "breadth" || col.Width != 9 || col.Style == nil {
+		t.Fatalf("column = %+v", col)
 	}
-	if got := vc.VolDetailColumn().Cell(row(table, at, "V")); got != "1$ 0·" {
-		t.Errorf("SPY-missing vol_detail = %q, want 1$ 0·", got)
+	// {V, W, X}: ↑ = {V, W} of 3; on volume among them = {V} → 2/3 1$.
+	if got := col.Cell(row(table, at, "V", "W", "X")); got != " 2/3   1$" {
+		t.Errorf("merged = %q, want \" 2/3   1$\"", got)
+	}
+	// Fixed columns: a two-digit denominator and count keep the slash and
+	// $ in place — every cell is exactly Width bytes wide.
+	for _, c := range []string{col.Cell(row(table, at, "V", "W", "X")), col.Cell(row(table, at, "B", "L"))} {
+		if len([]rune(c)) != 9 {
+			t.Errorf("cell %q is %d runes wide, want 9", c, len([]rune(c)))
+		}
+	}
+	// No ↑ member: nothing to count on the volume side — `0/2`, no $ term,
+	// padded so the slash stays aligned.
+	if got := col.Cell(row(table, at, "B", "L")); got != " 0/2     " {
+		t.Errorf("no-up = %q, want \" 0/2     \"", got)
+	}
+	// Price side gaps before the persistence horizon: whole cell gaps.
+	if got := col.Cell(row(table, open+2*60+5, "V", "W")); got != gap {
+		t.Errorf("pre-horizon = %q, want gap", got)
+	}
+	// Whole-cell highlight follows the price fraction alone (T7): 2/2 ↑ →
+	// green; a mixed basket → none.
+	if got := col.Style(row(table, at, "V", "W")); got != sgrGreen {
+		t.Errorf("style = %q, want green", got)
+	}
+	if got := col.Style(row(table, at, "V", "W", "X", "B")); got != "" {
+		t.Errorf("style = %q, want none", got)
+	}
+	// Unstyled variant carries no Style.
+	if vc.BreadthColumn(false).Style != nil {
+		t.Error("unstyled column carries a Style")
+	}
+	// Determinism.
+	if a, b := col.Cell(row(table, at, "V", "W", "X")), col.Cell(row(table, at, "V", "W", "X")); a != b {
+		t.Errorf("nondeterministic: %q vs %q", a, b)
+	}
+
+	// Volume side wholly unmeasurable: U ↑ on price with a median-0 profile,
+	// N has no profile — zero volume-measured members, price measured →
+	// `1/2 ·$`, never `1/2 0$`.
+	vc2, table2, at2 := unmeasuredUpSynth(t, false)
+	if got := vc2.BreadthColumn(true).Cell(row(table2, at2, "U", "N")); got != " 1/2   ·$" {
+		t.Errorf("volume-unmeasured = %q, want \" 1/2   ·$\"", got)
+	}
+	// Partial unmeasurement: N IS volume-measured but the ↑ member U has no
+	// basis — the $ count would be over a partially unknown set, so it is
+	// still `·$` (the dev up_on_vol cell prints 0/1 for the same state).
+	vc3, table3, at3 := unmeasuredUpSynth(t, true)
+	if got := vc3.BreadthColumn(true).Cell(row(table3, at3, "U", "N")); got != " 1/2   ·$" {
+		t.Errorf("partially-unmeasured = %q, want \" 1/2   ·$\"", got)
+	}
+	// SPY missing: price side gaps → whole cell gaps even though V's
+	// volume is measurable.
+	vc4, table4, at4 := spyMissingSynth(t)
+	if got := vc4.BreadthColumn(true).Cell(row(table4, at4, "V")); got != gap {
+		t.Errorf("SPY-missing = %q, want gap", got)
 	}
 }
 

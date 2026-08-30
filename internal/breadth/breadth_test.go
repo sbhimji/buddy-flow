@@ -204,3 +204,24 @@ func synthOpen(t *testing.T) int64 {
 	}
 	return open
 }
+
+// TestReturns (MO-8 accessor): every member's since-open return and SPY's
+// through the last completed minute, from the SAME anchors the states use;
+// an unmeasured member is per-entry ok=false; pre-first-minute is ok=false
+// overall.
+func TestReturns(t *testing.T) {
+	c, table, open := synth(t)
+	rets, spy, ok := c.Returns([]*ingest.SymbolState{table.Lookup("A"), table.Lookup("B"), table.Lookup("E")}, open+2*60+5)
+	if !ok || spy != 0 {
+		t.Fatalf("Returns ok=%v spy=%v", ok, spy)
+	}
+	// Runtime division, not a folded constant — the same rounding the
+	// accessor performs.
+	up, down := 101.0, 99.0
+	if !rets[0].OK || rets[0].Ret != up/100-1 || !rets[1].OK || rets[1].Ret != down/100-1 || rets[2].OK {
+		t.Errorf("rets = %+v", rets)
+	}
+	if _, _, ok := c.Returns(nil, open+30); ok {
+		t.Error("Returns ok before the first completed minute")
+	}
+}

@@ -92,16 +92,16 @@ func TestHandComputedBucket(t *testing.T) {
 	if b.SignedNotional() != 150 { // (100−0) − (0−50)
 		t.Errorf("signed_notional = %v, want 150", b.SignedNotional())
 	}
-	if s.SweepPrints != 1 || s.SidePrints[sideAsk] != 1 || s.SidePrints[sideBid] != 1 || s.SidePrints[sideZero] != 1 {
-		t.Errorf("telemetry = sweep %d sides %v", s.SweepPrints, s.SidePrints)
+	if tel := s.Telemetry(); tel.SweepPrints != 1 || tel.SidePrints[SideAsk] != 1 || tel.SidePrints[SideBid] != 1 || tel.SidePrints[SideZero] != 1 {
+		t.Errorf("telemetry = %+v", s.Telemetry())
 	}
 }
 
 func TestUnclassifiableCounted(t *testing.T) {
 	s := newTestStore(t)
 	s.ObserveOptionTrade(print(anchor(t, 0), func(tr *optingest.OptionTrade) { tr.Expiry = "garbage" }))
-	if s.Unclassifiable != 1 {
-		t.Errorf("unclassifiable = %d, want 1", s.Unclassifiable)
+	if s.Telemetry().Unclassifiable != 1 {
+		t.Errorf("unclassifiable = %d, want 1", s.Telemetry().Unclassifiable)
 	}
 	if p, _ := s.Totals(); p != 0 {
 		t.Errorf("prints = %d, want 0 (unclassifiable never buckets)", p)

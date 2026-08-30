@@ -24,33 +24,6 @@ import (
 	"buddy-flow/internal/zguard"
 )
 
-// Share returns basket counted $vol / universe counted $vol over
-// [fromSec, toSec). ok=false when the universe traded nothing — 0/0 is a
-// gap, never 0% (D5). Single pass over the union, numerator summed from
-// the SAME reads as the denominator: two separate passes would race the
-// live pipeline writer between them and could render a share above 100% —
-// a false statement of measurement. Basket ⊆ union by construction (D1),
-// so one pass caps share at 100%.
-func Share(store *bucket.Store, basket, union []*ingest.SymbolState, fromSec, toSec int64) (float64, bool) {
-	in := make(map[*ingest.SymbolState]bool, len(basket))
-	for _, st := range basket {
-		in[st] = true
-	}
-	var uni, bd float64
-	for _, st := range union {
-		b := store.Window(st, fromSec, toSec)
-		_, d := profile.Counted(b)
-		uni += d
-		if in[st] {
-			bd += d
-		}
-	}
-	if uni == 0 {
-		return 0, false
-	}
-	return bd / uni, true
-}
-
 // MinProfiledDays gates z computation (2.1's rule at basket level, D3): a
 // basket contributes a z only after this many sampled days at the minute.
 const MinProfiledDays = 10
@@ -127,6 +100,41 @@ const (
 	sgrGreen = "\x1b[1;32m"
 	sgrRed   = "\x1b[1;31m"
 )
+
+// SignedFlag is the shared |v| ≥ threshold predicate behind every signed
+// highlight (T2 posture): lit at or beyond ±threshold, positive by sign,
+// ok=false on a gap (never lit). The cell colour and the MO-6 glyph both
+// read it, so they cannot disagree (G1).
+func SignedFlag(v float64, ok bool, threshold float64) (lit, positive, okOut bool) {
+	if !ok {
+		return false, false, false
+	}
+	return v >= threshold || v <= -threshold, v > 0, true
+}
+
+// SGR is the T2 colour of a flag: bold green when lit and positive, bold
+// red when lit and negative, "" when unlit or on a gap.
+func SGR(lit, positive, ok bool) string {
+	switch {
+	case !ok || !lit:
+		return ""
+	case positive:
+		return sgrGreen
+	default:
+		return sgrRed
+	}
+}
+
+// CumZFlag is the MO-6 `Z` glyph predicate over a cum_share_z key —
+// TraderColumns returns that key as its rank (capture it before the
+// premarket wrapper takes the pre-open rank over). It is exactly the
+// cum_share_z cell's colour predicate: |z| ≥ SignificantZ, sign, gap.
+func CumZFlag(cumZ func(rc *devview.RowCtx) (float64, bool)) func(rc *devview.RowCtx) (lit, positive, ok bool) {
+	return func(rc *devview.RowCtx) (lit, positive, ok bool) {
+		z, ok := cumZ(rc)
+		return SignedFlag(z, ok, SignificantZ)
+	}
+}
 
 // Union resolves the D1 denominator — every distinct basket member, sorted
 // — against the symbol table. Errors on a member missing from the table
@@ -399,17 +407,8 @@ func (c *cells) cumShareZCol(style bool) devview.Column {
 		// T2: |z| ≥ SignificantZ renders bold green/red by SIGN — a
 		// statement of measurement (share above/below its own typical),
 		// never buy/sell language.
-		col.Style = func(rc *devview.RowCtx) string {
-			z, ok := c.cumZ(rc)
-			switch {
-			case !ok || z < SignificantZ && z > -SignificantZ:
-				return ""
-			case z > 0:
-				return sgrGreen
-			default:
-				return sgrRed
-			}
-		}
+		zflag := CumZFlag(c.cumZ)
+		col.Style = func(rc *devview.RowCtx) string { return SGR(zflag(rc)) }
 	}
 	return col
 }
@@ -508,47 +507,35 @@ func Columns(store *bucket.Store, union []*ingest.SymbolState, shares map[string
 const TraderFooter = `cum_share         = % of all dollars traded across our tracked universe since the open that went through this basket (includes opening auction; live to this second)
 cum_share_typ     = what that % typically is by this time of day, median of the last 20 sessions (steps at each completed minute)
 cum_share_z       = how unusual today is vs those 20 days, in σ — ±1 ordinary, ±2 notable (highlighted), ±3 rare (compares completed minutes, so it steps each minute while cum_share moves)
-relative_vol      = last full minute's dollars vs the typical for that exact minute — 1.0 = normal pace
-breadth           = how many of this basket's stocks have beaten SPY since the open for 3 straight minutes (by more than 0.10%) — 8/9 is a crowd, 1/9 is one stock's story; bold green when over 70% of the basket is outperforming, bold red when over 70% is underperforming
-up_on_vol         = of the stocks breadth counts as beating SPY, how many are also trading over 1.5× their usual dollar volume for that exact minute of day, 3 straight minutes — 7/9 is a crowd moving on size, 1/9 is price without it; index arbitrage lifts every stock's volume on macro days, so read it across baskets, never alone
+breadth           = "7/9 5$": of 9 stocks in this basket, 7 have beaten SPY by more than 0.10% for 3 straight minutes; 5 of those 7 were also trading over 1.5× their usual dollar volume for that exact minute of day, all 3 minutes — 8/9 is a crowd, 1/9 is one stock's story; the $ count says whether the crowd is moving on size or on price alone
+                    bold green when over 70% of the basket is outperforming, bold red when over 70% is underperforming; "·$" = volume side has no basis this minute (one or more counted stocks lack a volume baseline); no $ term when no stock is outperforming; index arbitrage lifts every stock's volume on macro days, so read the $ count across baskets, never alone
 SPY (top line)    = the index's own price change since the open, the reference breadth is measured against — green above +0.10%, red below −0.10%, yellow in between
-concentration     = the single stock carrying the largest share of this basket's dollars last minute
 concentration_day = the single stock carrying the largest share of this basket's dollars since the open (incl. opening auction; live to this second)
 ·                 = no basis for comparison — never a zero
 `
 
-// TraderColumns composes the trader-view-v0 set: the since-open story,
-// one instantaneous pulse (relative_vol), breadth and up_on_vol (composed
-// by the caller from internal/breadth — this package stays ignorant of
-// their internals; up_on_vol added at owner request 2026-08-17, mini-spec
-// 3.2b), and both concentrations — sorted by the returned rank (cum z
-// descending, gaps last). No per-minute share z: it flickers; the
-// cumulative z carries the story. The returned footer (TraderFooter)
-// defines every column in plain English; the clock-line legends the
-// columns would otherwise carry are dropped — the footer explains them,
-// the clock line just names the minutes.
-func TraderColumns(store *bucket.Store, union []*ingest.SymbolState, shares map[string]*profile.ShareProfile, floors *profile.Floors, breadthCol, upOnVolCol devview.Column) (cols []devview.Column, rank func(rc *devview.RowCtx) (float64, bool), footer string) {
+// TraderColumns composes the trader column set v1 (MO-1, mini-spec
+// docs/mini-specs/metric-overload/MO-1-column-prune.md): the since-open
+// story, the merged breadth cell (composed by the caller from
+// internal/breadth — this package stays ignorant of its internals), and
+// the session-long concentration — sorted by the returned rank (cum z
+// descending, gaps last). No per-minute columns: relative_vol and the
+// per-minute concentration flicker and stay on the dev view (their only
+// implementation lives there / in Columns); the cumulative z carries the
+// story. The returned footer (TraderFooter) defines every column in plain
+// English; the clock-line legends the columns would otherwise carry are
+// dropped — the footer explains them, the clock line just names the
+// minutes.
+func TraderColumns(store *bucket.Store, union []*ingest.SymbolState, shares map[string]*profile.ShareProfile, floors *profile.Floors, breadthCol devview.Column) (cols []devview.Column, rank func(rc *devview.RowCtx) (float64, bool), footer string) {
 	c := &cells{store: store, union: union, shares: shares, floors: floors}
-	relVol := devview.Column{Name: "relative_vol", Width: 12,
-		Cell: func(rc *devview.RowCtx) string {
-			base, ok := rc.PrevMinuteBaseline()
-			if !ok || base == 0 {
-				return gap
-			}
-			return fmt.Sprintf("%.2f", rc.PrevMinuteCounted()/base)
-		}}
 	cum := c.cumShareCol()
 	cum.Legend = ""
 	breadthCol.Legend = "" // the footer explains it; trader clock line stays bare
-	upOnVolCol.Legend = ""
 	return []devview.Column{
 		cum,
 		c.cumShareTypCol(),
 		c.cumShareZCol(true),
-		relVol,
 		breadthCol,
-		upOnVolCol,
-		c.concentrationCol(),
 		c.concentrationDayCol(),
 	}, c.cumZ, TraderFooter
 }

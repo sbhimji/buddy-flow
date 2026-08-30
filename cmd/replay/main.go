@@ -23,13 +23,15 @@ import (
 
 	"buddy-flow/internal/breadth"
 	"buddy-flow/internal/bucket"
+	"buddy-flow/internal/delta"
 	"buddy-flow/internal/devview"
 	"buddy-flow/internal/feed"
+	"buddy-flow/internal/flags"
 	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
-	"buddy-flow/internal/optbucket"
-	"buddy-flow/internal/optclassify"
+	"buddy-flow/internal/optequity"
 	"buddy-flow/internal/premarket"
+	"buddy-flow/internal/relperf"
 	"buddy-flow/internal/session"
 	"buddy-flow/internal/tickerview"
 	"buddy-flow/internal/universe"
@@ -52,12 +54,12 @@ func main() {
 		bucketsPath = flag.String("buckets", "", "write the 1.4 bucket store CSV here after the run; empty = no buckets")
 		view        = flag.Bool("view", false, "3.0 developer view: auto-refreshing basket table (requires -capture; pace with -speed)")
 		profilesDir = flag.String("profiles", "data/profiles", "profile directory for -view baselines")
-		viewMode    = flag.String("view-mode", "dev", "-view column set: dev (all metrics, name order) or trader (trader-view-v0: cum-share story, cum-z sort, significance highlight)")
+		viewMode    = flag.String("view-mode", "dev", "-view column set: dev (all metrics, name order), trader (trader-view-v0: cum-share story, cum-z sort, significance highlight), or premarket (MO-7: the premarket tab's frame — pre_vol/pre_share/pre_conc ranked by pre_share, frozen at 09:30; the same composition cmd/live writes to -pre-log)")
 		viewAt      = flag.String("view-at", "", "also render the -view table as of this ET HH:MM:SS after the replay (spot checks; buckets are event-time keyed, so any past second is exact)")
 		basketName  = flag.String("basket", "", "ticker-view-v0 drill-down: render this basket's members under its row, or 'all' for every basket (trader mode only)")
 		drillPath   = flag.String("drill", "", "trader mode: rewrite this file (atomically, every 5s of event time) with every basket's ticker drill-down — tools/live_view_server.py --drill serves it as ?basket=NAME for a paced replay watched in the browser")
-		optBuckets  = flag.String("options-buckets", "", "ticker-view-v0: the session's options bucket file (7.4, data/buckets-options/<date>.csv) — with -options-profiles adds per-ticker conv_z/net_z")
-		optProfiles = flag.String("options-profiles", "", "ticker-view-v0: options profile dir (7.6) for per-ticker conv_z/net_z; requires -options-buckets")
+		optBuckets  = flag.String("options-buckets", "", "the session's options bucket file (7.4, data/buckets-options/<date>.csv) — with -options-profiles adds basket conv_z/net_z to the trader table (MO-5) and per-ticker conv_z/net_z to the drill-down and strip (ticker-view-v0)")
+		optProfiles = flag.String("options-profiles", "", "options profile dir (7.6) for basket and per-ticker conv_z/net_z; goes with -options-buckets; a weights-stamp mismatch is fatal (acceptance fails fast)")
 		optWeights  = flag.String("options-weights", "docs/foundations/options-weights-v1.json", "conviction weights config (7.3) — the stamp the options files must carry")
 	)
 	flag.Parse()
@@ -88,8 +90,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-view applies only to -capture replay")
 		os.Exit(2)
 	}
-	if *viewMode != "dev" && *viewMode != "trader" {
-		fmt.Fprintln(os.Stderr, "-view-mode must be dev or trader")
+	if *viewMode != "dev" && *viewMode != "trader" && *viewMode != "premarket" {
+		fmt.Fprintln(os.Stderr, "-view-mode must be dev, trader, or premarket")
 		os.Exit(2)
 	}
 	if *basketName != "" && (!*view || *viewMode != "trader") {
@@ -163,8 +165,16 @@ func main() {
 	table := ingest.NewTable(syms)
 	p := ingest.NewPipeline(table, *queueSize)
 
+	// Signed volume (MO-2) is recorded only from a time-ordered source: a
+	// capture replays as one stream through the live decoder; flat files
+	// stream trades and quotes concurrently from ticker-sorted files, so the
+	// book at classification time would be scheduler-dependent — that store
+	// never classifies and its file carries no signed columns (B1).
 	var store *bucket.Store
-	if *bucketsPath != "" || *view {
+	switch {
+	case *capturePath != "" && (*bucketsPath != "" || *view):
+		store = bucket.NewTimeOrderedStore()
+	case *bucketsPath != "" || *view:
 		store = bucket.NewStore()
 	}
 	// The view wraps the store (delegates + tracks the replayed clock), so
@@ -204,22 +214,67 @@ func main() {
 		// 3.2b volume breadth: reuses the view's already-loaded
 		// per-ticker profiles.
 		vc := breadth.NewVol(bc, store, dv.Profiles())
-		if *viewMode == "trader" {
-			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, bc.Column(true), vc.UpOnVolColumn())
+		// MO-3: delta / class% from the signed columns MO-2 stores; one
+		// Calc serves whichever column set is composed.
+		dc := delta.New(store)
+		// MO-8 run metrics: since/5m_z from the share series (one Run per
+		// process) and vs_SPY over breadth's own anchors (relperf).
+		run := flowshare.NewRun(store, unionStates, shares, floors)
+		rp := relperf.New(bc)
+		// One premarket Calc per process (its memo serves whichever
+		// frame is composed).
+		pc := premarket.New(store, unionStates)
+		switch *viewMode {
+		case "premarket":
+			// MO-7 (T4 replay parity): the premarket tab's frame — the
+			// same premarket.Tab composition cmd/live renders to its
+			// -pre-log — so -view-at 08:00:00 checks and snapshots
+			// exercise the live code path.
+			cols, rank, footer := pc.Tab()
+			dv.SetColumns(cols)
+			dv.SetRank(rank)
+			dv.SetFooter(footer)
+			dv.SetStatus(pc.Status)
+		case "trader":
+			cols, rank, footer := flowshare.TraderColumns(store, unionStates, shares, floors, vc.BreadthColumn(true))
+			// MO-6: the flags column reads each column's own colour
+			// predicate; the cum_share_z key is the rank before premarket
+			// wraps it, and every other slot is wired as its package lands
+			// below (an unwired slot stays unlit).
+			fl := flags.Set{Z: flowshare.CumZFlag(rank), R: run.RunFlag, B: bc.Flag, Dollar: vc.DollarFlag, Delta: dc.Flag}
 			// Premarket columns + pre-open rank (premarket-view-v0) —
 			// same composition as cmd/live so replays reproduce the
 			// trader's screen.
-			cols, rank, footer = premarket.New(store, unionStates).ExtendTrader(cols, rank, footer)
-			// Ticker view (ticker-view-v0): crossings strip on every
-			// trader frame; drill-down under the -basket row; per-ticker
-			// options z only when the options tape + profiles are given.
+			cols, rank, footer = pc.ExtendTrader(cols, rank, footer)
+			// MO-8: since / 5m_z after cum_share_z, then vs_SPY after 5m_z
+			// (README order: … cum_share_z since 5m_z vs_SPY breadth …).
+			cols, footer = run.ExtendTrader(cols, footer)
+			cols, footer = rp.ExtendTrader(cols, footer)
+			// After concentration_day (README order); gaps on a store
+			// that recorded no classification.
+			cols, footer = dc.ExtendTrader(cols, footer)
+			// MO-5: the options tape on the equity screen — basket
+			// conv_z/net_z after class% and the per-ticker source for the
+			// drill-down and strip — only when the options tape + profiles
+			// are given. A stamp mismatch is fatal here (7.7 V3): replay is
+			// the acceptance environment and must fail fast — cmd/live is
+			// the one that keeps its table and refuses only the columns.
 			var opts *tickerview.OptionsSource
 			if *optProfiles != "" {
-				if opts, err = loadOptions(*optWeights, *optBuckets, *optProfiles, syms); err != nil {
-					fmt.Fprintln(os.Stderr, err)
+				src, err := optequity.LoadReplay(*optWeights, *optBuckets, *optProfiles, bks, syms)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "options columns REFUSED: %v\n", err)
 					os.Exit(1)
 				}
+				cols, footer = src.ExtendTrader(cols, footer)
+				opts = src.Ticker
+				fl.Conv = src.ConvFlag
 			}
+			// MO-6: flags leftmost, after every slot's package has been
+			// composed (basket-level only; the drill-down keeps `since`).
+			cols, footer = fl.ExtendTrader(cols, footer)
+			// Ticker view (ticker-view-v0): crossings strip on every
+			// trader frame; drill-down under the -basket row.
 			tv, err := tickerview.New(store, table, bks, dv.Profiles(), floors, opts)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
@@ -241,7 +296,7 @@ func main() {
 			dv.SetRank(rank)
 			dv.SetFooter(footer)
 			dv.SetStatus(bc.Status)
-		} else {
+		default:
 			for _, c := range flowshare.Columns(store, unionStates, shares, floors) {
 				dv.Register(c)
 			}
@@ -249,6 +304,15 @@ func main() {
 			dv.Register(bc.DetailColumn())
 			dv.Register(vc.UpOnVolColumn())
 			dv.Register(vc.VolDetailColumn())
+			for _, c := range dc.DevColumns() {
+				dv.Register(c)
+			}
+			for _, c := range run.DevColumns() {
+				dv.Register(c)
+			}
+			for _, c := range rp.DevColumns() {
+				dv.Register(c)
+			}
 		}
 	}
 	switch { // before Run starts (pipeline contract)
@@ -307,10 +371,11 @@ func main() {
 				fmt.Fprintln(os.Stderr, nerr)
 				os.Exit(2)
 			}
-			writeBuckets(store, *bucketsPath) // reports the tripwire itself
-		} else {
-			reportTripwire(store) // -view-only runs still build a store; its tripwire must still be read
+			writeBuckets(store, *bucketsPath)
 		}
+		// -view-only runs still build a store; its tripwire must still be
+		// read, and the aggressor line is the session's honesty record.
+		bucket.Report(os.Stdout, store, p.CondOverflow.Load())
 		return
 	}
 
@@ -421,22 +486,7 @@ func main() {
 		os.Exit(3) // bad input file — distinct from exit 1 (lost messages) and 2 (flag misuse)
 	}
 	writeBuckets(store, *bucketsPath)
-}
-
-// loadOptions binds the replayed day's options bucket file (7.4) and the
-// per-ticker options profiles (7.6) — both stamp-checked against the
-// weights config — as the ticker view's options source.
-func loadOptions(weightsPath, bucketsPath, profilesDir string, syms []string) (*tickerview.OptionsSource, error) {
-	w, hash, err := optclassify.LoadWeights(weightsPath)
-	if err != nil {
-		return nil, err
-	}
-	stamp := w.Version + "@" + hash
-	sess, err := optbucket.ReadCSV(bucketsPath, stamp)
-	if err != nil {
-		return nil, err
-	}
-	return tickerview.LoadOptions(profilesDir, syms, stamp, tickerview.SessionMinutes(sess))
+	bucket.Report(os.Stdout, store, p.CondOverflow.Load())
 }
 
 // startRenderLoop drives the -view refresh: re-render whenever the REPLAYED
@@ -506,19 +556,6 @@ func renderViewAt(dv *devview.View, store *bucket.Store, hms string) {
 	fmt.Print(dv.Render(sec))
 }
 
-// reportTripwire prints the 0.3 unknown-condition tripwire. Consulted on
-// every path that builds a store: writeBuckets covers -buckets runs, and
-// the -view-only path calls it directly — a tripwire nobody reads is no
-// tripwire. Nil-safe.
-func reportTripwire(store *bucket.Store) {
-	if store == nil {
-		return
-	}
-	if n, ids := store.Unknown(); n > 0 {
-		fmt.Printf("!! tripwire: %d prints carried condition IDs missing from the 0.3 table: %v\n", n, ids)
-	}
-}
-
 // validateCaptureBucketName enforces the D3 coverage-naming contract on the
 // one path that produces partial files: a capture-derived store that does
 // not span the regular session (coverage through the 16:00 closing cross)
@@ -554,9 +591,10 @@ func validateCaptureBucketName(store *bucket.Store, path string) error {
 	return nil
 }
 
-// writeBuckets persists the 1.4 store and reports the unknown-condition
-// tripwire. No-op when -buckets was not given. Only called on clean runs —
-// a bucket file from a partial run would masquerade as a full session.
+// writeBuckets persists the 1.4 store. No-op when -buckets was not given.
+// Only called on clean runs — a bucket file from a partial run would
+// masquerade as a full session. The store summary (tripwire + aggressor
+// line) is printed by bucket.Report on every path that builds a store.
 func writeBuckets(store *bucket.Store, path string) {
 	if store == nil || path == "" {
 		return
@@ -567,7 +605,6 @@ func writeBuckets(store *bucket.Store, path string) {
 		os.Exit(1)
 	}
 	fmt.Printf("buckets: %d (second,symbol) rows -> %s\n", rows, path)
-	reportTripwire(store)
 }
 
 // reportState prints universe totals, (when top is set) the busiest

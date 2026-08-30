@@ -8,9 +8,10 @@
 // against its own history. No composite score, no ranked list whose key is
 // not a named metric (V1: the drill-down sorts by cum_$_z; the strip is
 // TIME-ordered — a strip sorted by z would be a screener), no
-// price-change-as-signal, no FlowShare/breadth at ticker level (V3), no
-// NetDelta (V5). A ticker row explains a basket row; it never competes with
-// it.
+// price-change-as-signal, no FlowShare/breadth at ticker level (V3). A
+// ticker row explains a basket row; it never competes with it. Per-ticker
+// delta/class% (V5, revisited by MO-3) render with the D9 open window and
+// the honesty number beside them — the same rules as the basket pair.
 //
 // Everything computes at read time from the 1-second bucket store, the
 // per-ticker profiles (incl. the cum-dollar family) and the floors — no new
@@ -28,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"buddy-flow/internal/bucket"
+	"buddy-flow/internal/delta"
 	"buddy-flow/internal/devview"
 	"buddy-flow/internal/flowshare"
 	"buddy-flow/internal/ingest"
@@ -59,8 +61,10 @@ const (
 // + a minute reader). Nil means conv_z/net_z are not rendered at all.
 type OptionsSource struct {
 	// Minute returns the ticker's summed net_conviction and net_notional
-	// for the minute starting at minuteSec.
-	Minute   func(sym string, minuteSec int64) (netConv, netNotional float64)
+	// for the minute starting at minuteSec; ok=false when the minute is
+	// not measurable (unaligned, or the options tape has not reached its
+	// end) — rendered as a gap, never a fabricated zero (MO-4).
+	Minute   func(sym string, minuteSec int64) (netConv, netNotional float64, ok bool)
 	Profiles map[string]*optprofile.Profile // per ticker; a missing symbol renders gaps
 	Floors   *optprofile.Floors
 }
@@ -69,7 +73,7 @@ type OptionsSource struct {
 // (refusing a stale weights stamp) and binds a minute reader. A symbol
 // with no profile file is tolerated as a permanent gap (the options
 // universe may lag the equity one); a floors file is required.
-func LoadOptions(dir string, symbols []string, stamp string, minute func(sym string, minuteSec int64) (netConv, netNotional float64)) (*OptionsSource, error) {
+func LoadOptions(dir string, symbols []string, stamp string, minute func(sym string, minuteSec int64) (netConv, netNotional float64, ok bool)) (*OptionsSource, error) {
 	src := &OptionsSource{Minute: minute, Profiles: map[string]*optprofile.Profile{}}
 	for _, sym := range symbols {
 		p, err := optprofile.Read(dir, sym, stamp)
@@ -87,14 +91,14 @@ func LoadOptions(dir string, symbols []string, stamp string, minute func(sym str
 }
 
 // SessionMinutes adapts a read-back options bucket file (replay) to the
-// OptionsSource minute reader.
-func SessionMinutes(sess *optbucket.Session) func(sym string, minuteSec int64) (float64, float64) {
-	return func(sym string, minuteSec int64) (float64, float64) {
+// OptionsSource minute reader; an unaligned minute is ok=false.
+func SessionMinutes(sess *optbucket.Session) func(sym string, minuteSec int64) (float64, float64, bool) {
+	return func(sym string, minuteSec int64) (float64, float64, bool) {
 		b, err := sess.DeriveMinute(sym, minuteSec)
 		if err != nil {
-			return 0, 0
+			return 0, 0, false
 		}
-		return b.NetConviction, b.SignedNotional()
+		return b.NetConviction, b.SignedNotional(), true
 	}
 }
 
@@ -136,6 +140,11 @@ type history struct {
 	crossD float64
 	minS   float64 // last completed minute, Counted slice
 	minD   float64
+	// MO-3 trailing delta window, computed lazily on first drill-down use
+	// within the render second (the crossings strip never reads it) — one
+	// store pass per ticker per second, never per row call.
+	deltaOK bool
+	delta   delta.Minute
 }
 
 // New resolves baskets against the symbol table; every member must have a
@@ -271,6 +280,11 @@ type Row struct {
 	DollarOK bool
 	OfBasket float64
 	OfOK     bool
+	Delta    float64 // MO-3: trailing 5 completed minutes, strong rules over counted dollars
+	DeltaOK  bool
+	DeltaSGR string  // MO-3: highlight prefix, "" when below ±DeltaHighlight or under the per-ticker floor
+	Class    float64 // MO-3: share of those counted dollars the book could place
+	ClassOK  bool
 	ConvZ    float64
 	ConvOK   bool
 	NetZ     float64
@@ -336,13 +350,27 @@ func (c *Calc) row(st *ingest.SymbolState, atSec int64, basketCum float64) Row {
 		if p := c.opts.Profiles[st.Symbol]; p != nil && c.opts.Floors != nil {
 			i := key - session.OpenMinute
 			if pr := p.Rows[i]; pr.Days >= optprofile.MinProfiledDays {
-				conv, net := c.opts.Minute(st.Symbol, c.frame.cmEnd-60)
-				r.ConvZ, r.ConvOK = zguard.Z(conv, pr.MedianNetConv, pr.SigmaNetConv, c.opts.Floors.NetConv[i])
-				r.NetZ, r.NetOK = zguard.Z(net, pr.MedianNetNotional, pr.SigmaNetNotional, c.opts.Floors.NetNotional[i])
+				if conv, net, ok := c.opts.Minute(st.Symbol, c.frame.cmEnd-60); ok {
+					r.ConvZ, r.ConvOK = zguard.Z(conv, pr.MedianNetConv, pr.SigmaNetConv, c.opts.Floors.NetConv[i])
+					r.NetZ, r.NetOK = zguard.Z(net, pr.MedianNetNotional, pr.SigmaNetNotional, c.opts.Floors.NetNotional[i])
+				}
 			}
 		}
 	}
 	return r
+}
+
+// tickerDelta is the ticker's MO-3 trailing window for the render second,
+// memoized in its history: the drill-down reads it, the strip does not.
+func (c *Calc) tickerDelta(st *ingest.SymbolState, atSec int64) delta.Minute {
+	h := c.memo[st]
+	if h == nil || !c.frame.ok || c.frame.n == 0 {
+		return delta.Minute{}
+	}
+	if !h.deltaOK {
+		h.delta, h.deltaOK = delta.Trailing(c.store, []*ingest.SymbolState{st}, atSec), true
+	}
+	return h.delta
 }
 
 // Rows returns a basket's member rows sorted per V1/T1: cum_$_z
@@ -361,7 +389,11 @@ func (c *Calc) Rows(basket string, atSec int64) []Row {
 	}
 	rows := make([]Row, 0, len(ref.States))
 	for _, st := range ref.States {
-		rows = append(rows, c.row(st, atSec, basketCum))
+		r := c.row(st, atSec, basketCum)
+		dm := c.tickerDelta(st, atSec)
+		r.Delta, r.DeltaOK, r.Class, r.ClassOK = dm.Delta, dm.DeltaOK, dm.Class, dm.ClassOK
+		r.DeltaSGR = delta.TickerStyle(dm)
+		rows = append(rows, r)
 	}
 	sort.SliceStable(rows, func(a, b int) bool {
 		ra, rb := rows[a], rows[b]
@@ -411,7 +443,7 @@ func (c *Calc) Detail(basket string, atSec int64) string {
 	}
 	var sb strings.Builder
 	const ind = "    "
-	fmt.Fprintf(&sb, "%s%-6s  %8s  %7s  %8s  %9s  %7s  %6s  %6s  %9s", ind, "TICKER", "last", "open%", "cum_$", "cum_$_typ", "cum_$_z", "rvol", "$_z", "of_basket")
+	fmt.Fprintf(&sb, "%s%-6s  %8s  %7s  %8s  %9s  %7s  %7s  %6s  %9s  %6s  %6s", ind, "TICKER", "last", "open%", "cum_$", "cum_$_typ", "cum_$_z", "rvol_sh", "$_z", "of_basket", "delta", "class%")
 	if c.opts != nil {
 		fmt.Fprintf(&sb, "  %6s  %6s", "conv_z", "net_z")
 	}
@@ -434,8 +466,12 @@ func (c *Calc) Detail(basket string, atSec int64) string {
 		if sgr := styleZ(r.Z, r.ZOK); sgr != "" {
 			zcell = sgr + zcell + "\x1b[0m"
 		}
-		fmt.Fprintf(&sb, "%s%-6s  %8s  %7s  %8s  %9s  %s  %6s  %6s  %9s", ind, r.Symbol, last, open,
-			fusd(r.Cum, r.CumOK), fusd(r.Typ, r.TypOK), zcell, rvol, fz(r.DollarZ, r.DollarOK), of)
+		dcell := fmt.Sprintf("%6s", delta.FmtDelta(r.Delta, r.DeltaOK))
+		if r.DeltaSGR != "" {
+			dcell = r.DeltaSGR + dcell + "\x1b[0m"
+		}
+		fmt.Fprintf(&sb, "%s%-6s  %8s  %7s  %8s  %9s  %s  %7s  %6s  %9s  %s  %6s", ind, r.Symbol, last, open,
+			fusd(r.Cum, r.CumOK), fusd(r.Typ, r.TypOK), zcell, rvol, fz(r.DollarZ, r.DollarOK), of, dcell, delta.FmtClass(r.Class, r.ClassOK))
 		if c.opts != nil {
 			fmt.Fprintf(&sb, "  %6s  %6s", fz(r.ConvZ, r.ConvOK), fz(r.NetZ, r.NetOK))
 		}
@@ -613,9 +649,10 @@ open%             = % from the opening auction cross (cross VWAP = dollars/share
 cum_$             = dollars traded since the open through the last completed minute, including the opening auction
 cum_$_typ         = what cum_$ typically is by this minute for this ticker, median of the last 20 sessions
 cum_$_z           = how unusual today's cum_$ is vs those 20 sessions, in σ — ±2 highlighted (green above typical, red below); a measurement of dollars, not of direction
-rvol              = last full minute's shares vs the typical for that exact minute — 1.0 = normal pace (excludes auction crosses; cum_$ includes them — two slices on one screen, deliberately)
+rvol_sh           = last full minute's shares (not dollars — the basket columns are dollars) vs the typical for that exact minute — 1.0 = normal pace (excludes auction crosses; cum_$ includes them — two slices on one screen, deliberately)
 $_z               = last full minute's dollars vs the typical for that exact minute, in σ (excludes crosses)
 of_basket         = this ticker's share of its basket's cum_$ — the concentration number from the ticker's side
+delta / class%    = same as the basket pair, for this ticker alone: trailing 5 completed minutes' dollars printed at/above the ask or above the midpoint minus at/below the bid or below the midpoint, over all its counted dollars, and the % of those dollars the book could place; bold at/beyond ±0.20, not highlighted under $500k / 20 placed prints in the window; · when the day's store carries no classification or nothing counted; 09:30's first 30 s excluded; from 09:33 (through 09:35 the window is shorter than 5 minutes)
 conv_z / net_z    = last completed minute's options premium (conviction-weighted / unweighted; ask-side minus bid-side, calls positive puts negative) vs this ticker's own 20d matched-minute median/MAD; · until 10 profiled days (options profile gate) or when no options tape is wired
 since             = the ET minute cum_$_z first went beyond ±2.0σ today; blank if never
 crossed ±2.0σ     = tickers across all baskets whose cum_$_z is beyond ±2.0σ right now, newest crossing first (time order, not size order); at most 8 listed per sign — "+N more (broad)" means the tape is broad, which the breadth column already says; a name drops off when its |z| falls back

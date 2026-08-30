@@ -19,6 +19,8 @@ package bucket
 
 import (
 	"bufio"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +28,7 @@ import (
 	"strings"
 	"sync"
 
+	"buddy-flow/internal/aggressor"
 	"buddy-flow/internal/classify"
 	"buddy-flow/internal/ingest"
 	"buddy-flow/internal/session"
@@ -47,6 +50,15 @@ type ClassAgg struct {
 // is the reader's job via the per-class fields. LastPrice/LastSipTs are the
 // raw tape's last print in the bucket (by SIP ts, arrival order breaking
 // ties), unfiltered by class — a price-forming "last" is a Phase 3 concern.
+//
+// Signed volume (MO-2 / story 3.3) lives behind the Signed pointer: nil
+// means NOT RECORDED — a store fed by a source that is not time-ordered
+// (flat-file replay), or a bucket file written before MO-2. Absence
+// propagates through add/Window/DeriveMinute, so no consumer can sum an
+// unrecorded day as zero (review S7); consumers must nil-check, and a
+// derived Unclassified reports ok=false. These sums are stored, not
+// recomputed, because the book they were classified against is gone by
+// read time (1.4 "store what cannot be derived").
 type Bucket struct {
 	Trades    int64
 	Shares    float64
@@ -55,8 +67,40 @@ type Bucket struct {
 	LastSipTs int64
 	Quotes    int64
 	Class     [NumClasses]ClassAgg
+	Signed    *SignedAgg
 }
 
+// SignedAgg is the aggressor cascade's output for one bucket. AskSide /
+// BidSide are the totals over every rule; QuoteAsk / QuoteBid the subset
+// decided by the quote or midpoint rule (the strong classifiers), so the
+// tick-rule share is total − quote. TickRule counts eligible prints that
+// reached the tick rule whichever way they landed (the F2 data-quality
+// number); Late counts eligible prints skipped as late. Unclassified is
+// derived (Eligible − AskSide − BidSide), never stored.
+type SignedAgg struct {
+	AskSide  ClassAgg
+	BidSide  ClassAgg
+	QuoteAsk ClassAgg
+	QuoteBid ClassAgg
+	TickRule int64
+	Late     int64
+}
+
+func (s *SignedAgg) add(o *SignedAgg) {
+	s.AskSide.add(&o.AskSide)
+	s.BidSide.add(&o.BidSide)
+	s.QuoteAsk.add(&o.QuoteAsk)
+	s.QuoteBid.add(&o.QuoteBid)
+	s.TickRule += o.TickRule
+	s.Late += o.Late
+}
+
+// add sums o into b. Signed sums only when BOTH sides carry it: an
+// accumulator that was started without Signed (a store or session that
+// did not record it) stays nil however many recorded buckets are added,
+// and vice versa a recorded accumulator ignores nothing — o.Signed is
+// never nil when b.Signed is non-nil within one store/session, since
+// recording is a per-source property, not per-bucket.
 func (b *Bucket) add(o *Bucket) {
 	b.Trades += o.Trades
 	b.Shares += o.Shares
@@ -66,10 +110,48 @@ func (b *Bucket) add(o *Bucket) {
 		b.LastPrice, b.LastSipTs = o.LastPrice, o.LastSipTs
 	}
 	for i := range b.Class {
-		b.Class[i].Trades += o.Class[i].Trades
-		b.Class[i].Shares += o.Class[i].Shares
-		b.Class[i].Dollars += o.Class[i].Dollars
+		b.Class[i].add(&o.Class[i])
 	}
+	if b.Signed != nil && o.Signed != nil {
+		b.Signed.add(o.Signed)
+	}
+}
+
+func (c *ClassAgg) add(o *ClassAgg) {
+	c.Trades += o.Trades
+	c.Shares += o.Shares
+	c.Dollars += o.Dollars
+}
+
+// Eligible is the aggressor cascade's denominator: every print whose class
+// enters the cascade (aggressor.Eligible — CONTINUOUS only), regardless of
+// how it landed. BLOCK prints are not here: they execute outside the quote
+// (print-inclusion.md) and are never signed, though their dollars remain in
+// any downstream Counted denominator that includes BLOCK.
+func (b *Bucket) Eligible() ClassAgg {
+	var out ClassAgg
+	for c := range b.Class {
+		if aggressor.Eligible(classify.Class(c)) {
+			out.add(&b.Class[c])
+		}
+	}
+	return out
+}
+
+// Unclassified is derived at read time, never stored: Eligible − AskSide −
+// BidSide (late prints and invalid-book prints included — denominator only,
+// the D15 posture). ok=false when signed volume was not recorded for this
+// bucket — render a gap, never a zero.
+func (b *Bucket) Unclassified() (ClassAgg, bool) {
+	if b.Signed == nil {
+		return ClassAgg{}, false
+	}
+	e := b.Eligible()
+	return ClassAgg{
+		Trades:  e.Trades - b.Signed.AskSide.Trades - b.Signed.BidSide.Trades,
+		Shares:  e.Shares - b.Signed.AskSide.Shares - b.Signed.BidSide.Shares,
+		Dollars: e.Dollars - b.Signed.AskSide.Dollars - b.Signed.BidSide.Dollars,
+	}, true
 }
 
 // Store implements ingest.Observer. The single pipeline goroutine writes;
@@ -79,18 +161,72 @@ type Store struct {
 	mu      sync.Mutex
 	buckets map[*ingest.SymbolState]map[int64]*Bucket
 
+	// timeOrdered: the feeding source delivers trades and quotes in one
+	// time-ordered stream (live websocket, capture replay), so the NBBO at
+	// ObserveTrade is the book as of arrival and the aggressor cascade may
+	// run. False for flat-file replays (ticker-sorted files streamed
+	// concurrently — the book at classification time would be
+	// scheduler-dependent): no classification, no Signed on any bucket, no
+	// signed columns in the file (review B1).
+	timeOrdered bool
+	// Per-symbol aggressor state (tick reference). Written only from the
+	// pipeline goroutine under mu; see aggressor.State for why it lives here
+	// and not in SymbolState.
+	agg map[*ingest.SymbolState]*aggressor.State
+
 	// Unknown-condition tripwire (0.3: quarantined + tripwired). Guarded by
 	// mu — the slow path only.
 	unknownPrints int64
 	unknownIDs    map[int32]int64
+
+	// Amendment ring (MO-8 review): every trade whose second is behind the
+	// latest second seen amends a bucket an incremental reader may already
+	// have summed. Each such write takes the next generation number and
+	// records its second in the ring; AmendedSince lets a reader learn the
+	// earliest amended second since the generation it last consumed, or
+	// that the ring has wrapped past it (full rebuild). Only trade writes
+	// matter — quotes carry no dollars. Guarded by mu.
+	maxSeenSec int64
+	amendGen   uint64
+	amendRing  [AmendRing]int64
 }
 
-// NewStore returns an empty store, ready to register as pipeline observer.
+// AmendRing is the amendment ring's capacity: generations older than the
+// current minus AmendRing are gone and AmendedSince reports ok=false. Late
+// prints run ~1% of the tape (MO-2), so a once-a-second reader sees tens
+// of amendments per render at the open — 4096 keeps a wide margin.
+const AmendRing = 4096
+
+// NewStore returns an empty store for a source that is NOT time-ordered
+// (flat-file replays, unit fixtures): no signed volume is recorded. Live and
+// capture-replay callers use NewTimeOrderedStore.
 func NewStore() *Store {
 	return &Store{
 		buckets:    map[*ingest.SymbolState]map[int64]*Bucket{},
+		agg:        map[*ingest.SymbolState]*aggressor.State{},
 		unknownIDs: map[int32]int64{},
 	}
+}
+
+// NewTimeOrderedStore returns an empty store for a time-ordered source
+// (live websocket, capture replay): every bucket records signed volume and
+// the file carries the signed columns.
+func NewTimeOrderedStore() *Store {
+	s := NewStore()
+	s.timeOrdered = true
+	return s
+}
+
+// TimeOrdered reports whether this store records signed volume.
+func (s *Store) TimeOrdered() bool { return s.timeOrdered }
+
+func (s *Store) aggFor(st *ingest.SymbolState) *aggressor.State {
+	a := s.agg[st]
+	if a == nil {
+		a = &aggressor.State{}
+		s.agg[st] = a
+	}
+	return a
 }
 
 func (s *Store) bucketFor(st *ingest.SymbolState, sipNs int64) *Bucket {
@@ -103,12 +239,17 @@ func (s *Store) bucketFor(st *ingest.SymbolState, sipNs int64) *Bucket {
 	b := m[sec]
 	if b == nil {
 		b = &Bucket{}
+		if s.timeOrdered {
+			b.Signed = &SignedAgg{}
+		}
 		m[sec] = b
 	}
 	return b
 }
 
-// ObserveTrade aggregates one print into its SIP-second bucket.
+// ObserveTrade aggregates one print into its SIP-second bucket and, for
+// eligible prints, classifies it against the book as of arrival (the
+// pipeline applied every earlier quote before calling here).
 func (s *Store) ObserveTrade(t *ingest.Trade) {
 	class, unknown := classify.Classify(t.Cond[:t.NCond])
 	// The explicit conversion forces the product to round to float64 before
@@ -125,6 +266,14 @@ func (s *Store) ObserveTrade(t *ingest.Trade) {
 			s.unknownIDs[id]++
 		}
 	}
+	sec := t.SipTs / 1e9
+	switch {
+	case sec > s.maxSeenSec:
+		s.maxSeenSec = sec
+	case sec < s.maxSeenSec:
+		s.amendGen++
+		s.amendRing[s.amendGen%AmendRing] = sec
+	}
 	b := s.bucketFor(t.State, t.SipTs)
 	b.Trades++
 	b.Shares += t.Size
@@ -136,6 +285,62 @@ func (s *Store) ObserveTrade(t *ingest.Trade) {
 	c.Trades++
 	c.Shares += t.Size
 	c.Dollars += dollars
+
+	if !s.timeOrdered {
+		return
+	}
+	r := s.aggFor(t.State).Classify(t, class)
+	if !r.Eligible {
+		return
+	}
+	sg := b.Signed
+	if r.Late {
+		sg.Late++
+	}
+	if r.Rule == aggressor.RuleTick {
+		sg.TickRule++
+	}
+	var side, quote *ClassAgg
+	switch r.Side {
+	case aggressor.AskSide:
+		side, quote = &sg.AskSide, &sg.QuoteAsk
+	case aggressor.BidSide:
+		side, quote = &sg.BidSide, &sg.QuoteBid
+	default:
+		return
+	}
+	one := ClassAgg{Trades: 1, Shares: t.Size, Dollars: dollars}
+	side.add(&one)
+	if r.Rule == aggressor.RuleQuote || r.Rule == aggressor.RuleMidpoint {
+		quote.add(&one)
+	}
+}
+
+// AmendedSince reports the buckets amended by trades written behind the
+// store's latest second since generation gen (a value a previous call
+// returned; 0 = the beginning): minSec is the earliest amended second and
+// newGen the generation to pass next time. minSec is meaningful only when
+// newGen != gen (nothing amended otherwise). ok=false when more than
+// AmendRing amendments have landed since gen — the ring has wrapped and
+// the reader cannot know how far back they reach: rebuild in full and
+// resume from newGen. A reader takes newGen BEFORE it reads the buckets
+// so a write landing during the read is caught by its next call.
+func (s *Store) AmendedSince(gen uint64) (minSec int64, newGen uint64, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	newGen = s.amendGen
+	if gen > newGen {
+		return 0, newGen, false // a generation from another store: rebuild
+	}
+	if newGen-gen > AmendRing {
+		return 0, newGen, false
+	}
+	for g := gen + 1; g <= newGen; g++ {
+		if sec := s.amendRing[g%AmendRing]; minSec == 0 || sec < minSec {
+			minSec = sec
+		}
+	}
+	return minSec, newGen, true
 }
 
 // ObserveQuote counts one NBBO update in its SIP-second bucket (D6: count
@@ -146,12 +351,57 @@ func (s *Store) ObserveQuote(q *ingest.Quote) {
 	s.bucketFor(q.State, q.SipTs).Quotes++
 }
 
+// Aggressor sums the store-wide honesty tally (MO-2 S5) from the buckets —
+// the same numbers a reader derives from the file, so the printed line and
+// the persisted columns cannot disagree. ok=false for a store that did not
+// record signed volume.
+func (s *Store) Aggressor() (aggressor.Stats, bool) {
+	var out aggressor.Stats
+	if !s.timeOrdered {
+		return out, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.buckets {
+		for _, b := range m {
+			out.Eligible += b.Eligible().Trades
+			out.Ask += b.Signed.AskSide.Trades
+			out.Bid += b.Signed.BidSide.Trades
+			out.Quote += b.Signed.QuoteAsk.Trades + b.Signed.QuoteBid.Trades
+			out.Tick += b.Signed.TickRule
+			out.Late += b.Signed.Late
+		}
+	}
+	return out, true
+}
+
+// Report writes the end-of-session store summary — the 0.3 unknown-condition
+// tripwire and the MO-2 aggressor honesty line — to w. The ONE path both
+// cmd/live and cmd/replay call (review S9), so neither binary can omit a
+// line. condOverflow is the pipeline's counter (ingest-cap note). Nil-safe.
+func Report(w io.Writer, s *Store, condOverflow int64) {
+	if s == nil {
+		return
+	}
+	if n, ids := s.Unknown(); n > 0 {
+		fmt.Fprintf(w, "!! tripwire: %d prints carried condition IDs missing from the 0.3 table: %v\n", n, ids)
+	}
+	if st, ok := s.Aggressor(); ok {
+		fmt.Fprintln(w, st.Line(condOverflow))
+	} else {
+		fmt.Fprintln(w, aggressor.NotTimeOrderedLine())
+	}
+}
+
 // Window sums one symbol's buckets over [fromSec, toSec) into a value copy
 // — the dev-view read path promised in the Store doc. Seconds with no entry
 // contribute nothing (the zero they are). LastPrice/LastSipTs follow the
 // same latest-SIP-ts rule as live aggregation.
 func (s *Store) Window(st *ingest.SymbolState, fromSec, toSec int64) Bucket {
 	var out Bucket
+	if s.timeOrdered {
+		out.Signed = &SignedAgg{}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m := s.buckets[st]
@@ -231,7 +481,12 @@ func (s *Store) Rows() []Row {
 	var rows []Row
 	for st, m := range s.buckets {
 		for sec, b := range m {
-			rows = append(rows, Row{Sec: sec, Symbol: st.Symbol, Bucket: *b})
+			r := Row{Sec: sec, Symbol: st.Symbol, Bucket: *b}
+			if b.Signed != nil {
+				sg := *b.Signed // value copy: the store's pointer stays private to the pipeline goroutine
+				r.Bucket.Signed = &sg
+			}
+			rows = append(rows, r)
 		}
 	}
 	s.mu.Unlock()
@@ -244,17 +499,39 @@ func (s *Store) Rows() []Row {
 	return rows
 }
 
-// header returns the self-describing CSV header. Column names for classes
-// come from the classify table (lowercased), so the file documents the
-// policy vocabulary it was written under; 3.3 adds columns without breaking
-// old files — the reader maps columns by name.
-func header() []string {
+// baseHeader returns the 1.4 columns — the permanent required base. Column
+// names for classes come from the classify table (lowercased), so the file
+// documents the policy vocabulary it was written under.
+func baseHeader() []string {
 	cols := []string{"second", "symbol", "trades", "shares", "dollars", "last_price", "last_sip_ns", "quotes"}
 	for c := 0; c < NumClasses; c++ {
 		name := strings.ToLower(classify.Class(c).String())
 		cols = append(cols, name+"_trades", name+"_shares", name+"_dollars")
 	}
 	return cols
+}
+
+// signedHeader returns the MO-2 signed-volume column family (S4, review
+// S2) — additive and OPTIONAL on read as an all-or-none set: a pre-MO-2 or
+// flat-file-derived file lacks them and loads with Session.HasSigned=false.
+func signedHeader() []string {
+	return []string{
+		"ask_trades", "ask_shares", "ask_dollars",
+		"bid_trades", "bid_shares", "bid_dollars",
+		"quote_ask_trades", "quote_ask_shares", "quote_ask_dollars",
+		"quote_bid_trades", "quote_bid_shares", "quote_bid_dollars",
+		"tick_rule", "late",
+	}
+}
+
+// header returns the self-describing CSV header for this store: the base
+// columns, plus the signed family only when the store recorded it. The
+// reader maps columns by name, never by position.
+func (s *Store) header() []string {
+	if s.timeOrdered {
+		return append(baseHeader(), signedHeader()...)
+	}
+	return baseHeader()
 }
 
 // fnum formats a float with the shortest representation that round-trips
@@ -281,11 +558,11 @@ func (s *Store) WriteCSV(path string) (int, error) {
 		_, err := w.WriteString(strings.Join(cols, ",") + "\n")
 		return err
 	}
-	if err := write(header()); err != nil {
+	if err := write(s.header()); err != nil {
 		f.Close()
 		return 0, err
 	}
-	cols := make([]string, 0, 8+3*NumClasses)
+	cols := make([]string, 0, 8+3*NumClasses+len(signedHeader()))
 	for i := range rows {
 		r := &rows[i]
 		b := &r.Bucket
@@ -298,6 +575,13 @@ func (s *Store) WriteCSV(path string) (int, error) {
 		for c := range b.Class {
 			ca := &b.Class[c]
 			cols = append(cols, strconv.FormatInt(ca.Trades, 10), fnum(ca.Shares), fnum(ca.Dollars))
+		}
+		if s.timeOrdered {
+			sg := b.Signed
+			for _, sa := range []*ClassAgg{&sg.AskSide, &sg.BidSide, &sg.QuoteAsk, &sg.QuoteBid} {
+				cols = append(cols, strconv.FormatInt(sa.Trades, 10), fnum(sa.Shares), fnum(sa.Dollars))
+			}
+			cols = append(cols, strconv.FormatInt(sg.TickRule, 10), strconv.FormatInt(sg.Late, 10))
 		}
 		if err := write(cols); err != nil {
 			f.Close()

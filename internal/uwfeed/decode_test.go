@@ -18,7 +18,7 @@ func (c *capturingObserver) ObserveOptionTrade(t *optingest.OptionTrade) {
 	c.got = append(c.got, *t)
 }
 
-func runPipeline(t *testing.T, frames []string) (*capturingObserver, *optingest.Pipeline, DecodeStats) {
+func runPipeline(t *testing.T, frames []string) (*capturingObserver, *optingest.Pipeline, *DecodeStats) {
 	t.Helper()
 	p := optingest.NewPipeline(1024)
 	obs := &capturingObserver{}
@@ -31,12 +31,12 @@ func runPipeline(t *testing.T, frames []string) (*capturingObserver, *optingest.
 	}
 	p.Close()
 	<-done
-	return obs, p, stats
+	return obs, p, &stats
 }
 
 func TestDecodeRealWireFrame(t *testing.T) {
 	obs, _, stats := runPipeline(t, []string{realDataFrame})
-	if stats.Prints != 1 || stats.DecodeErrs != 0 {
+	if stats.Prints.Load() != 1 || stats.DecodeErrs.Load() != 0 {
 		t.Fatalf("stats = %+v", stats)
 	}
 	tr := obs.got[0]
@@ -69,7 +69,7 @@ func TestDecodeRealWireFrame(t *testing.T) {
 func TestDecodeIndexEmptyUnderlyingPrice(t *testing.T) {
 	frame := `["option_trades:SPX",{"id":"01a02054-442d-7622-ade3-9aed1c92a584","underlying_symbol":"SPX","executed_at":1787248788491,"nbbo_bid":"1.00","nbbo_ask":"1.10","size":2,"price":"1.05","option_symbol":"SPXW260820C06000000","tags":["ask_side","index"],"expiry":"2026-08-20","option_type":"call","open_interest":100,"strike":"6000","premium":"210.00","underlying_price":"","trade_code":"slan"}]`
 	obs, _, stats := runPipeline(t, []string{frame})
-	if stats.Prints != 1 || stats.DecodeErrs != 0 {
+	if stats.Prints.Load() != 1 || stats.DecodeErrs.Load() != 0 {
 		t.Fatalf("stats = %+v", stats)
 	}
 	tr := obs.got[0]
@@ -97,17 +97,18 @@ func TestDecodeErrorsAndNonPrints(t *testing.T) {
 		`garbage`, // → DecodeErrs
 	}
 	_, _, stats := runPipeline(t, frames)
-	want := DecodeStats{Frames: 8, Prints: 0, Acks: 1, Controls: 2, NonTrade: 1, DecodeErrs: 4}
-	if stats != want {
-		t.Errorf("stats = %+v, want %+v", stats, want)
+	got := [6]int64{stats.Frames.Load(), stats.Prints.Load(), stats.Acks.Load(), stats.Controls.Load(), stats.NonTrade.Load(), stats.DecodeErrs.Load()}
+	want := [6]int64{8, 0, 1, 2, 1, 4} // frames, prints, acks, controls, non-trade, decode-errs
+	if got != want {
+		t.Errorf("stats = %v, want %v", got, want)
 	}
 }
 
 func TestDedupeWindow(t *testing.T) {
 	// The same print id submitted twice observes once and counts one dupe.
 	obs, p, stats := runPipeline(t, []string{realDataFrame, realDataFrame})
-	if stats.Prints != 2 { // decode-level count is pre-dedupe
-		t.Fatalf("prints = %d", stats.Prints)
+	if stats.Prints.Load() != 2 { // decode-level count is pre-dedupe
+		t.Fatalf("prints = %d", stats.Prints.Load())
 	}
 	if len(obs.got) != 1 || p.Dupes.Load() != 1 || p.Processed.Load() != 1 {
 		t.Errorf("observed=%d dupes=%d processed=%d, want 1/1/1", len(obs.got), p.Dupes.Load(), p.Processed.Load())

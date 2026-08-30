@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,9 +40,12 @@ type Bucket struct {
 	PrintsZeroOI   int64 // D16 neutral-size prints
 }
 
-// Store implements optingest.Observer. Single-goroutine access (the
-// pipeline's consumer), same contract as bucket.Store.
+// Store implements optingest.Observer. One writer (the pipeline's
+// consumer) and any number of readers on other goroutines (MO-4 F2): the
+// writer takes mu; Get/Window/Bounds/Totals take the read lock. MaxSec
+// stays atomic. WriteCSV and Telemetry read under the read lock too.
 type Store struct {
+	mu          sync.RWMutex
 	weights     optclassify.Weights
 	weightsName string // "<version>@<hash>", the artifact stamp
 	buckets     map[string]map[int64]*Bucket
@@ -54,9 +58,9 @@ type Store struct {
 	// for paced/follow views (atomic: read from the render goroutine).
 	MaxSec atomic.Int64
 
-	Unclassifiable int64 // K3 bad-expiry prints, stamped into the header (B5)
-	SweepPrints    int64 // classification-rate telemetry (7.3 done-when 3)
-	SidePrints     [3]int64
+	unclassifiable int64 // K3 bad-expiry prints, stamped into the header (B5)
+	sweepPrints    int64 // classification-rate telemetry (7.3 done-when 3)
+	sidePrints     [3]int64
 }
 
 // Side telemetry indices.
@@ -82,8 +86,10 @@ func NewStore(w optclassify.Weights, weightsName string) (*Store, error) {
 }
 
 // ObserveOptionTrade classifies one print and folds it into its event-time
-// second (B1).
+// second (B1). Writer side of the store lock.
 func (s *Store) ObserveOptionTrade(t *optingest.OptionTrade) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.cls == nil && s.clsErr == nil {
 		date := time.Unix(0, t.ExecNs).In(s.loc).Format("2006-01-02")
 		s.cls, s.clsErr = optclassify.NewClassifier(s.weights, date)
@@ -93,7 +99,7 @@ func (s *Store) ObserveOptionTrade(t *optingest.OptionTrade) {
 	}
 	p, ok := s.cls.Classify(t)
 	if !ok {
-		s.Unclassifiable++
+		s.unclassifiable++
 		return
 	}
 
@@ -130,7 +136,7 @@ func (s *Store) ObserveOptionTrade(t *optingest.OptionTrade) {
 	}
 	if p.IsSweep {
 		b.PremSweep += t.Premium
-		s.SweepPrints++
+		s.sweepPrints++
 	}
 	b.NetConviction += p.Weighted
 	if p.NoUPrice {
@@ -141,18 +147,53 @@ func (s *Store) ObserveOptionTrade(t *optingest.OptionTrade) {
 	}
 	switch p.Sign {
 	case 1:
-		s.SidePrints[sideAsk]++
+		s.sidePrints[sideAsk]++
 	case -1:
-		s.SidePrints[sideBid]++
+		s.sidePrints[sideBid]++
 	default:
-		s.SidePrints[sideZero]++
+		s.sidePrints[sideZero]++
 	}
 }
 
-// Get returns one bucket (nil if silent). Window sums [fromSec, toSec).
-func (s *Store) Get(sym string, sec int64) *Bucket { return s.buckets[sym][sec] }
+// Telemetry is the classification-rate telemetry (7.3 done-when 3),
+// read under the lock.
+type Telemetry struct {
+	Unclassifiable int64    // K3 bad-expiry prints, stamped into the header (B5)
+	SweepPrints    int64    // prints on sweep condition codes
+	SidePrints     [3]int64 // [SideZero, SideAsk, SideBid]
+}
 
+// Side telemetry indices of Telemetry.SidePrints.
+const (
+	SideZero = sideZero // mid/no_side/absent
+	SideAsk  = sideAsk
+	SideBid  = sideBid
+)
+
+// Telemetry returns a snapshot of the store-wide counters.
+func (s *Store) Telemetry() Telemetry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return Telemetry{Unclassifiable: s.unclassifiable, SweepPrints: s.sweepPrints, SidePrints: s.sidePrints}
+}
+
+// Get returns a copy of one bucket (nil if silent) — a copy, so the caller
+// never holds a pointer the writer is still folding into.
+func (s *Store) Get(sym string, sec int64) *Bucket {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	b := s.buckets[sym][sec]
+	if b == nil {
+		return nil
+	}
+	c := *b
+	return &c
+}
+
+// Window sums [fromSec, toSec) under the read lock.
 func (s *Store) Window(sym string, fromSec, toSec int64) Bucket {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var out Bucket
 	bySec := s.buckets[sym]
 	for sec := fromSec; sec < toSec; sec++ {
@@ -186,6 +227,8 @@ func (b *Bucket) SignedNotional() float64 {
 
 // Bounds reports the observed second range (ok=false when empty).
 func (s *Store) Bounds() (minSec, maxSec int64, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	for _, bySec := range s.buckets {
 		for sec := range bySec {
 			if !ok {
@@ -205,6 +248,8 @@ func (s *Store) Bounds() (minSec, maxSec int64, ok bool) {
 
 // Totals reports prints and contracts across the store.
 func (s *Store) Totals() (prints, contracts int64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	for _, bySec := range s.buckets {
 		for _, b := range bySec {
 			prints += b.Prints
@@ -230,6 +275,8 @@ var columns = []string{
 // WriteCSV persists the store: stamped header, sorted rows, .tmp+rename,
 // shortest-round-trip floats (B4). Returns rows written.
 func (s *Store) WriteCSV(path string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.clsErr != nil {
 		return 0, fmt.Errorf("classifier never initialized: %w", s.clsErr)
 	}
@@ -243,7 +290,7 @@ func (s *Store) WriteCSV(path string) (int, error) {
 	}
 	w := bufio.NewWriterSize(f, 1<<20)
 
-	fmt.Fprintf(w, "# options buckets (mini-spec 7.4): weights=%s; unclassifiable=%d\n", s.weightsName, s.Unclassifiable)
+	fmt.Fprintf(w, "# options buckets (mini-spec 7.4): weights=%s; unclassifiable=%d\n", s.weightsName, s.unclassifiable)
 	fmt.Fprintln(w, strings.Join(columns, ","))
 
 	syms := make([]string, 0, len(s.buckets))

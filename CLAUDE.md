@@ -5,7 +5,10 @@ concentrating across a ~191-symbol universe (164 basket members + benchmarks) gr
 22 baskets, whether it is rotating, and whether the buying is broad and aggressive or thin
 and passive. Primary user moment: 09:30–10:30 ET.
 
-**Status: pre-code.** The repo currently contains only `docs/`. Read these before doing
+**Status: building.** Phases 1–3 partial (capture/replay, 1-second store, 20-day profiles,
+FlowShare + breadth on a trader frame, per-ticker drill-down) and Phase 7 (options tape) landed;
+`docs/mini-specs/` is the story ledger, and `docs/mini-specs/metric-overload/` is the current
+curation pass (which columns stay, what merges, what gets added). Read these before doing
 anything substantive:
 
 - `docs/INITIAL-PROJECT.md` — the build spec: what the product is; §2 is the math and *is* the product.
@@ -79,8 +82,8 @@ deterministic replay of captured sessions is what makes all other work possible.
 live run — recorded sessions are the test corpus, and the §6 reference days (SNDK guide-night
 open, VIAV→optics morning, a known de-grossing day) can only be recorded when they occur.
 
-Build the crude developer view (story 3.0) before any math. Every metric becomes visible the
-day it is written; that is how intuition for the numbers gets acquired.
+The crude developer view (story 3.0) was built before any math and stays the dev mode; every
+metric becomes visible the day it is written — that is how intuition for the numbers gets acquired.
 
 ## Decisions belong to the trader
 
@@ -100,4 +103,4 @@ because ETF arbitrage moves members mechanically (F18).
 ## Timeline
 
 4–6 weeks solo to the §6 acceptance bar, assuming partial reuse of APEX ingestion plumbing.
-The spec's 2-week figure reaches a demo, not acceptance (F10). Phases 0–1 are the schedule risk.
+The spec's 2-week figure reaches a demo, not acceptance (F10). Phases 0–1 (the schedule risk) are done; the risk now sits in the §6 reference days, which can only be recorded when they occur.

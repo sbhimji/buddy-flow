@@ -285,22 +285,45 @@ func (c *Calc) Column(styled bool) devview.Column {
 		return fmt.Sprintf("%d/%d", up, len(rc.Basket.States))
 	}}
 	if styled {
-		col.Style = func(rc *devview.RowCtx) string {
-			up, _, down, ok := c.count(rc.Basket.States, rc.AtSec)
-			if !ok {
-				return ""
-			}
-			n := float64(len(rc.Basket.States))
-			switch {
-			case float64(up)/n > HighlightFrac:
-				return sgrGreen
-			case float64(down)/n > HighlightFrac:
-				return sgrRed
-			}
-			return ""
-		}
+		col.Style = c.Style
 	}
 	return col
+}
+
+// Style is the T7 HighlightFrac rule as a devview.Column.Style: bold green
+// when MORE than HighlightFrac of full membership is persistently ↑, bold
+// red when more than HighlightFrac is persistently ↓, else none (gap rows
+// included). Shared by the 3.2 cell and the MO-1 merged cell so the
+// highlight has one owner.
+func (c *Calc) Style(rc *devview.RowCtx) string {
+	lit, positive, ok := c.Flag(rc)
+	switch {
+	case !ok || !lit:
+		return ""
+	case positive:
+		return sgrGreen
+	default:
+		return sgrRed
+	}
+}
+
+// Flag is the MO-6 `B` glyph predicate and the single owner of the T7
+// rule: lit when MORE than HighlightFrac of full membership is
+// persistently ↑ (positive) or ↓ (negative); ok=false when breadth gaps
+// (pre-horizon, SPY unmeasured) — never lit. Style is its colour.
+func (c *Calc) Flag(rc *devview.RowCtx) (lit, positive, ok bool) {
+	up, _, down, ok := c.count(rc.Basket.States, rc.AtSec)
+	if !ok {
+		return false, false, false
+	}
+	n := float64(len(rc.Basket.States))
+	switch {
+	case float64(up)/n > HighlightFrac:
+		return true, true, true
+	case float64(down)/n > HighlightFrac:
+		return true, false, true
+	}
+	return false, false, true
 }
 
 // DetailColumn is the three-state detail (dev view only — the dev plan's
@@ -315,4 +338,44 @@ func (c *Calc) DetailColumn() devview.Column {
 			}
 			return fmt.Sprintf("%d↑ %d· %d↓", up, inline, down)
 		}}
+}
+
+// Return is one member's since-open return as of a window end: ok=false
+// when the member has no anchor or no last price in the window (B4's
+// "unmeasured" — the member folds to the middle in breadth; an
+// equal-weighted mean has no middle to fold into, so relperf excludes it
+// and discloses the count).
+type Return struct {
+	Ret float64
+	OK  bool
+}
+
+// Returns is the MO-8 accessor relperf averages (3.6 RelPerf, R4): every
+// member's since-open return and SPY's, through the end of the last
+// completed minute — the SAME anchors (B3: earliest traded second in
+// [open, end)) and last prices (B2: raw tape) the breadth states read, so
+// vs_SPY and breadth can never disagree about a member's return. ok=false
+// before the first completed session minute or when SPY is unmeasurable;
+// members are per-entry. Memoized with the rest of the render's prices.
+func (c *Calc) Returns(members []*ingest.SymbolState, atSec int64) (rets []Return, spyRet float64, ok bool) {
+	openSec, end, ok := window(atSec, 1)
+	if !ok {
+		return nil, 0, false
+	}
+	c.memo(atSec)
+	sa := c.anchor(c.spy, openSec, end)
+	sp := c.last(c.spy, openSec, end)
+	if !sa.ok || !sp.ok {
+		return nil, 0, false
+	}
+	spyRet = sp.v/sa.v - 1
+	rets = make([]Return, len(members))
+	for i, st := range members {
+		a := c.anchor(st, openSec, end)
+		p := c.last(st, openSec, end)
+		if a.ok && p.ok {
+			rets[i] = Return{Ret: p.v/a.v - 1, OK: true}
+		}
+	}
+	return rets, spyRet, true
 }

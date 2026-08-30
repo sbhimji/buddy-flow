@@ -17,6 +17,13 @@ import (
 // can see the universe; this reader only answers per-symbol lookups.
 type Session struct {
 	rows map[string]map[int64]Bucket
+
+	// HasSigned is false when the file carries no signed-volume family
+	// (written before MO-2, or from a source that is not time-ordered):
+	// every Bucket's Signed is then nil — "not recorded", never a zero
+	// measurement — and DeriveMinute propagates the nil. Readers render a
+	// gap.
+	HasSigned bool
 }
 
 // ReadCSV loads a session bucket file (plain or .gz — D4 gzips after close).
@@ -63,15 +70,29 @@ func ReadCSV(path string) (*Session, error) {
 		}
 		return i, nil
 	}
-	want := header()
+	want := baseHeader()
 	pos := make([]int, len(want))
 	for i, name := range want {
 		if pos[i], err = col(name); err != nil {
 			return nil, err
 		}
 	}
+	// Signed columns (MO-2): optional as a set — all present or none. A
+	// partial set is a corrupt header, not an old file.
+	signed := signedHeader()
+	spos := make([]int, len(signed))
+	nSigned := 0
+	for i, name := range signed {
+		if j, ok := idx[name]; ok {
+			spos[i] = j
+			nSigned++
+		}
+	}
+	if nSigned != 0 && nSigned != len(signed) {
+		return nil, fmt.Errorf("%s: %d of %d signed-volume columns present; expected all or none", path, nSigned, len(signed))
+	}
 
-	s := &Session{rows: map[string]map[int64]Bucket{}}
+	s := &Session{rows: map[string]map[int64]Bucket{}, HasSigned: nSigned == len(signed)}
 	line := 1
 	for sc.Scan() {
 		line++
@@ -111,6 +132,16 @@ func ReadCSV(path string) (*Session, error) {
 			b.Class[c].Shares = pF(get(9 + 3*c))
 			b.Class[c].Dollars = pF(get(10 + 3*c))
 		}
+		if s.HasSigned {
+			sget := func(i int) string { return fields[spos[i]] }
+			agg := func(i int) ClassAgg {
+				return ClassAgg{Trades: pInt(sget(i)), Shares: pF(sget(i + 1)), Dollars: pF(sget(i + 2))}
+			}
+			b.Signed = &SignedAgg{
+				AskSide: agg(0), BidSide: agg(3), QuoteAsk: agg(6), QuoteBid: agg(9),
+				TickRule: pInt(sget(12)), Late: pInt(sget(13)),
+			}
+		}
 		if perr != nil {
 			return nil, fmt.Errorf("%s:%d: %w", path, line, perr)
 		}
@@ -142,6 +173,9 @@ func (s *Session) DeriveMinute(symbol string, minuteSec int64) (Bucket, error) {
 		return Bucket{}, fmt.Errorf("minuteSec %d is not minute-aligned", minuteSec)
 	}
 	var out Bucket
+	if s.HasSigned {
+		out.Signed = &SignedAgg{}
+	}
 	m := s.rows[symbol]
 	for sec := minuteSec; sec < minuteSec+60; sec++ {
 		if b, ok := m[sec]; ok {

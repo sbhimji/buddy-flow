@@ -108,7 +108,8 @@ func main() {
 				os.Exit(2)
 			}
 		}
-		pacedView = &viewer{store: store, p: p, stats: &stats, bks: bks, base: base, refresh: *refresh,
+		progress, drained := pipelineProgress(p, &stats)
+		pacedView = &viewer{store: store, progress: progress, drained: drained, bks: bks, base: base, refresh: *refresh,
 			header: fmt.Sprintf("REPLAY %s x%g", filepath.Base(filepath.Dir(*capturePath)), *speed)}
 		if *speed == 0 {
 			fmt.Println("note: -view with -speed 0 renders as fast as the replay runs; use -speed N to watch at N× real time")
@@ -137,11 +138,11 @@ func main() {
 
 	fmt.Printf("replayed in %s: frames=%d prints=%d acks=%d controls=%d non-trade=%d decode-errs=%d\n",
 		time.Since(start).Round(time.Millisecond),
-		stats.Frames, stats.Prints, stats.Acks, stats.Controls, stats.NonTrade, stats.DecodeErrs)
+		stats.Frames.Load(), stats.Prints.Load(), stats.Acks.Load(), stats.Controls.Load(), stats.NonTrade.Load(), stats.DecodeErrs.Load())
 	fmt.Printf("pipeline: processed=%d dupes=%d queue-max=%d\n",
 		p.Processed.Load(), p.Dupes.Load(), p.MaxQueueDepth.Load())
-	if stats.DecodeErrs > 0 {
-		fmt.Printf("!! tripwire: %d decode errors — inspect the capture (frames are preserved raw)\n", stats.DecodeErrs)
+	if stats.DecodeErrs.Load() > 0 {
+		fmt.Printf("!! tripwire: %d decode errors — inspect the capture (frames are preserved raw)\n", stats.DecodeErrs.Load())
 	}
 	if store == nil {
 		return
@@ -156,9 +157,10 @@ func main() {
 		}
 		return 100 * float64(n) / float64(prints)
 	}
-	ask, bid, zero := store.SidePrints[1], store.SidePrints[2], store.SidePrints[0]
+	tel := store.Telemetry()
+	ask, bid, zero := tel.SidePrints[optbucket.SideAsk], tel.SidePrints[optbucket.SideBid], tel.SidePrints[optbucket.SideZero]
 	fmt.Printf("classified: prints=%d contracts=%d ask=%.1f%% bid=%.1f%% zero-sign=%.1f%% sweep=%.1f%% unclassifiable=%d\n",
-		prints, contracts, pct(ask), pct(bid), pct(zero), pct(store.SweepPrints), store.Unclassifiable)
+		prints, contracts, pct(ask), pct(bid), pct(zero), pct(tel.SweepPrints), tel.Unclassifiable)
 
 	minSec, maxSec, ok := store.Bounds()
 	if !ok {

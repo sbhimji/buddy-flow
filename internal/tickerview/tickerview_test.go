@@ -99,12 +99,14 @@ func TestRowsAndDetail(t *testing.T) {
 		t.Errorf("D = %+v", d)
 	}
 
+	// MO-3: bucket.NewStore is not time-ordered → Signed nil → delta and
+	// class% gap (never 0); the signed case is TestDeltaSigned.
 	got := c.Detail("one", at)
 	want := "" +
-		"    TICKER      last    open%     cum_$  cum_$_typ  cum_$_z    rvol     $_z  of_basket  since\n" +
-		"    A          12.00  +20.00%     1.60k      1.00k  \x1b[1;32m   +3.0\x1b[0m    0.50   +50.0        57%  09:30\n" +
-		"    C          10.00        ·     1.00k      1.00k     +0.0    1.00   +90.0        36%       \n" +
-		"    B          10.00        ·       200      1.00k  \x1b[1;31m   -4.0\x1b[0m    0.20   +10.0         7%  09:30\n"
+		"    TICKER      last    open%     cum_$  cum_$_typ  cum_$_z  rvol_sh     $_z  of_basket   delta  class%  since\n" +
+		"    A          12.00  +20.00%     1.60k      1.00k  \x1b[1;32m   +3.0\x1b[0m     0.50   +50.0        57%       ·       ·  09:30\n" +
+		"    C          10.00        ·     1.00k      1.00k     +0.0     1.00   +90.0        36%       ·       ·       \n" +
+		"    B          10.00        ·       200      1.00k  \x1b[1;31m   -4.0\x1b[0m     0.20   +10.0         7%       ·       ·  09:30\n"
 	if got != want {
 		t.Errorf("detail:\n%s\nwant:\n%s", got, want)
 	}
@@ -216,10 +218,14 @@ func TestFooterScopeLaw(t *testing.T) {
 			t.Errorf("footer contains %q", banned)
 		}
 	}
-	for _, col := range []string{"last ", "open% ", "cum_$ ", "cum_$_typ ", "cum_$_z ", "rvol ", "$_z ", "of_basket ", "conv_z", "since ", "crossed"} {
+	for _, col := range []string{"last ", "open% ", "cum_$ ", "cum_$_typ ", "cum_$_z ", "rvol_sh ", "$_z ", "of_basket ", "conv_z", "since ", "crossed"} {
 		if !strings.Contains(Footer, col) {
 			t.Errorf("footer does not define %q", col)
 		}
+	}
+	// MO-1: the shares ratio is named for what it is; the old name is gone.
+	if strings.Contains(Footer, "rvol ") {
+		t.Error("footer still defines rvol (renamed rvol_sh)")
 	}
 }
 
@@ -242,5 +248,78 @@ func TestNoCumFamilyGaps(t *testing.T) {
 	c, _ = New(store, table, []universe.Basket{{Name: "one", Members: syms}}, profs, fl, nil)
 	if r := c.Rows("one", open+65)[0]; r.ZOK || !r.TypOK {
 		t.Errorf("old floors: row = %+v", r)
+	}
+}
+
+// TestDeltaSigned drives prints through the real pipeline into a
+// time-ordered store (the only kind that classifies) and checks the
+// per-ticker trailing delta/class% with the D9 window: A's 09:30:10 print
+// at the ask is excluded; its 09:30:40 prints — 300 at the ask ($3300,
+// quote rule), 100 at the bid ($1000, quote rule), 100 at the midpoint
+// 10.5 ($1050: an up-tick from the last different price 10 → AskSide by
+// the tick rule, so in delta_all but not delta) — give delta
+// (3300−1000)/5350 = +0.43 on class% 80% and delta_all
+// (4350−1000)/5350 = +0.63. Rendered at 09:33:05, the first second the
+// trailing window reaches 150 s; at 09:32:59 it gaps. $5,350 is under the
+// per-ticker highlight floor, so the +0.43 is unstyled. B prints only in
+// the excluded window → counted 0 → gaps.
+func TestDeltaSigned(t *testing.T) {
+	syms := []string{"A", "B"}
+	table := ingest.NewTable(syms)
+	store := bucket.NewTimeOrderedStore()
+	open, err := session.BucketStart("2026-08-14", session.OpenMinute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := ingest.NewPipeline(table, 64)
+	p.SetObserver(store)
+	done := make(chan struct{})
+	go func() { p.Run(); close(done) }()
+	quote := func(sym string, bid, ask float64, sec int64) {
+		m := ingest.Msg{Kind: ingest.KindQuote}
+		m.Quote = ingest.Quote{State: table.Lookup(sym), BidPrice: bid, AskPrice: ask, SipTs: sec * 1e9}
+		p.Submit(m)
+	}
+	tr := func(sym string, price, size float64, ns int64) {
+		m := ingest.Msg{Kind: ingest.KindTrade}
+		m.Trade = ingest.Trade{State: table.Lookup(sym), Price: price, Size: size, SipTs: ns, PartTs: ns}
+		p.Submit(m)
+	}
+	quote("A", 10, 11, open-1)
+	quote("B", 10, 11, open-1)
+	tr("A", 11, 100, (open+10)*1e9)   // D9: excluded
+	tr("B", 11, 100, (open+10)*1e9)   // D9: excluded
+	tr("A", 11, 300, (open+40)*1e9)   // at ask
+	tr("A", 10, 100, (open+40)*1e9+1) // at bid
+	tr("A", 10.5, 100, (open+40)*1e9+2)
+	p.Close()
+	<-done
+	profs, fl := synthProfiles(syms)
+	c, err := New(store, table, []universe.Basket{{Name: "one", Members: syms}}, profs, fl, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := c.Rows("one", open+2*60+59); rows[0].DeltaOK || rows[0].ClassOK {
+		t.Errorf("09:32:59 rendered before the window reached 150 s: %+v", rows[0])
+	}
+	at := open + 3*60 + 5
+	rows := c.Rows("one", at)
+	a, b := rows[0], rows[1]
+	counted, ask, bid := 3300.0+1000.0+1050.0, 3300.0, 1000.0
+	if a.Symbol != "A" || !a.DeltaOK || !a.ClassOK || a.Delta != (ask-bid)/counted || a.Class != (ask+bid)/counted || a.DeltaSGR != "" {
+		t.Errorf("A = %+v", a)
+	}
+	if dm := c.tickerDelta(table.Lookup("A"), at); !dm.DeltaAllOK || dm.DeltaAll != (ask+1050.0-bid)/counted || dm.Prints != 2 {
+		t.Errorf("A delta_all/prints = %+v", dm)
+	}
+	if b.DeltaOK || b.ClassOK {
+		t.Errorf("B (counted 0 after D9) = %+v", b)
+	}
+	got := c.Detail("one", at)
+	if !strings.Contains(got, "   +0.43     80%") || strings.Contains(got, "\x1b[1;32m +0.43") {
+		t.Errorf("detail lacks unstyled +0.43 / 80%%:\n%s", got)
+	}
+	if !strings.Contains(got, "      ·       ·") {
+		t.Errorf("B row lacks delta/class%% gaps:\n%s", got)
 	}
 }
